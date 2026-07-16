@@ -15,6 +15,7 @@ import time
 import webbrowser
 import wave
 from collections import OrderedDict
+from contextlib import suppress
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from enum import Enum
@@ -983,6 +984,20 @@ class VoiceRecognizer:
         if self.device is None:
             raise RuntimeError("Не найдено ни одного доступного устройства ввода.")
         self.sample_rate = self.device.default_samplerate if self.device.default_samplerate > 0 else 16000
+        self._lock = threading.RLock()
+        self._closed = False
+        self._active_stream = None
+
+    def close(self) -> None:
+        with self._lock:
+            self._closed = True
+            stream = self._active_stream
+            self._active_stream = None
+        if stream is not None:
+            with suppress(Exception):
+                stream.abort()
+            with suppress(Exception):
+                stream.close()
 
     def listen(
         self,
@@ -990,8 +1005,14 @@ class VoiceRecognizer:
         min_rms: float = 0.0,
         min_confidence: float = 0.0,
         silence_timeout_sec: float = 2.0,
+        cancel_event: threading.Event | None = None,
     ) -> str:
         import numpy as np
+
+        cancel_event = cancel_event or threading.Event()
+        with self._lock:
+            if self._closed:
+                return ""
 
         recognizer = self.KaldiRecognizer(self.model, self.sample_rate)
         if hasattr(recognizer, "SetWords"):
@@ -1008,41 +1029,67 @@ class VoiceRecognizer:
         prebuffer: list[bytes] = []
         max_prebuffer_blocks = max(1, int(0.6 / 0.2))
 
-        with self.sd.InputStream(
+        stream = self.sd.InputStream(
             samplerate=self.sample_rate,
             channels=1,
             dtype="int16",
             device=self.device.index,
             blocksize=block_size,
-        ) as stream:
-            while time.monotonic() - started_at < timeout_sec:
-                block, _overflowed = stream.read(block_size)
-                block_bytes = block.tobytes()
-                audio = block.astype(np.float32) / 32768.0
-                rms = float(np.sqrt(np.mean(np.square(audio)))) if audio.size else 0.0
+        )
+        with self._lock:
+            if self._closed:
+                with suppress(Exception):
+                    stream.close()
+                return ""
+            self._active_stream = stream
 
-                has_voice = min_rms <= 0 or rms >= min_rms
-                if has_voice:
-                    if not speech_started:
-                        chunks.extend(prebuffer)
-                        for buffered_block in prebuffer:
-                            recognizer.AcceptWaveform(buffered_block)
-                        prebuffer.clear()
-                    speech_started = True
-                    last_voice_at = time.monotonic()
-
-                if speech_started:
-                    chunks.append(block_bytes)
-                    recognizer.AcceptWaveform(block_bytes)
-                    rms_values.append(rms)
-                    if last_voice_at and time.monotonic() - last_voice_at >= silence_timeout_sec:
+        try:
+            with stream:
+                while (
+                    not cancel_event.is_set()
+                    and time.monotonic() - started_at < timeout_sec
+                ):
+                    block, _overflowed = stream.read(block_size)
+                    if cancel_event.is_set():
                         break
-                else:
-                    prebuffer.append(block_bytes)
-                    if len(prebuffer) > max_prebuffer_blocks:
-                        prebuffer.pop(0)
+                    block_bytes = block.tobytes()
+                    audio = block.astype(np.float32) / 32768.0
+                    rms = (
+                        float(np.sqrt(np.mean(np.square(audio))))
+                        if audio.size
+                        else 0.0
+                    )
 
-        if not chunks:
+                    has_voice = min_rms <= 0 or rms >= min_rms
+                    if has_voice:
+                        if not speech_started:
+                            chunks.extend(prebuffer)
+                            for buffered_block in prebuffer:
+                                recognizer.AcceptWaveform(buffered_block)
+                            prebuffer.clear()
+                        speech_started = True
+                        last_voice_at = time.monotonic()
+
+                    if speech_started:
+                        chunks.append(block_bytes)
+                        recognizer.AcceptWaveform(block_bytes)
+                        rms_values.append(rms)
+                        if (
+                            last_voice_at
+                            and time.monotonic() - last_voice_at
+                            >= silence_timeout_sec
+                        ):
+                            break
+                    else:
+                        prebuffer.append(block_bytes)
+                        if len(prebuffer) > max_prebuffer_blocks:
+                            prebuffer.pop(0)
+        finally:
+            with self._lock:
+                if self._active_stream is stream:
+                    self._active_stream = None
+
+        if cancel_event.is_set() or not chunks:
             return ""
 
         rms = max(rms_values) if rms_values else 0.0

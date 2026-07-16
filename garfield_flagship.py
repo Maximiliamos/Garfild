@@ -388,6 +388,9 @@ class FlagshipRuntime:
         self.command_worker = threading.Thread(target=self._command_worker_loop, daemon=True)
         self.voice_worker: threading.Thread | None = None
         self.listening_lock = threading.Lock()
+        self.audio_lock = threading.RLock()
+        self.voice_cancel_event = threading.Event()
+        self.voice_generation = 0
         self.started = False
         self.session_lines: deque[str] = deque(maxlen=2_000)
         self.wake_active_until = 0.0
@@ -422,7 +425,12 @@ class FlagshipRuntime:
         if self.stop_event.is_set():
             return
         self.stop_event.set()
-        self.listening_enabled = False
+        with self.audio_lock:
+            self._stop_voice_worker_locked()
+            recognizer = self.voice_recognizer
+            self.voice_recognizer = None
+            if recognizer is not None:
+                recognizer.close()
         while True:
             try:
                 self.command_queue.get_nowait()
@@ -433,7 +441,6 @@ class FlagshipRuntime:
             self.command_queue.put_nowait(None)
         except queue.Full:
             logging.warning("Не удалось добавить сигнал остановки command worker.")
-        self._stop_voice_worker()
         self.tts.stop()
         if self.command_worker.is_alive():
             self.command_worker.join(timeout=5)
@@ -539,7 +546,7 @@ class FlagshipRuntime:
                 return items
 
     def set_listening(self, enabled: bool) -> None:
-        with self.listening_lock:
+        with self.listening_lock, self.audio_lock:
             if not self.voice_recognizer:
                 self.listening_enabled = False
                 self.emit("status", "Голосовой ввод недоступен. Используйте текстовый режим.")
@@ -551,9 +558,10 @@ class FlagshipRuntime:
             self.listening_enabled = enabled
             self.emit("status", "Прослушивание включено." if enabled else "Прослушивание остановлено.")
 
-            if enabled and (self.voice_worker is None or not self.voice_worker.is_alive()):
-                self.voice_worker = threading.Thread(target=self._voice_worker_loop, daemon=True)
-                self.voice_worker.start()
+            if enabled:
+                self._start_voice_worker_locked()
+            else:
+                self._stop_voice_worker_locked()
 
     def _prepare_inputs(self) -> None:
         if self.config.input_mode == "keyboard":
@@ -584,31 +592,38 @@ class FlagshipRuntime:
         recognition_confidence_threshold: float | None = None,
         wake_word_confidence_threshold: float | None = None,
     ) -> str:
-        was_listening = self.listening_enabled
-        self.listening_enabled = False
-        self.voice_recognizer = None
+        with self.audio_lock:
+            was_listening = self.listening_enabled
+            self._stop_voice_worker_locked()
+            old_recognizer = self.voice_recognizer
+            self.voice_recognizer = None
+            if old_recognizer is not None:
+                old_recognizer.close()
 
-        self.config.input_device_index = input_device_index
-        self.config.output_device_index = output_device_index
-        if activation_mode is not None:
-            self.config.activation_mode = activation_mode
-        if wake_words is not None:
-            cleaned = [core.normalize_text(word) for word in wake_words if core.normalize_text(word)]
-            self.config.wake_words = cleaned or ["гарфилд"]
-        if wake_window_sec is not None:
-            self.config.wake_window_sec = max(3, min(int(wake_window_sec), 60))
-        if voice_activation_threshold is not None:
-            self.config.voice_activation_threshold = max(0.0, min(float(voice_activation_threshold), 0.1))
-        if recognition_confidence_threshold is not None:
-            self.config.recognition_confidence_threshold = max(0.0, min(float(recognition_confidence_threshold), 1.0))
-        if wake_word_confidence_threshold is not None:
-            self.config.wake_word_confidence_threshold = max(0.0, min(float(wake_word_confidence_threshold), 1.0))
-        self.tts.set_output_device(output_device_index)
-        self._prepare_inputs()
+            self.config.input_device_index = input_device_index
+            self.config.output_device_index = output_device_index
+            if activation_mode is not None:
+                self.config.activation_mode = activation_mode
+            if wake_words is not None:
+                cleaned = [core.normalize_text(word) for word in wake_words if core.normalize_text(word)]
+                self.config.wake_words = cleaned or ["гарфилд"]
+            if wake_window_sec is not None:
+                self.config.wake_window_sec = max(3, min(int(wake_window_sec), 60))
+            if voice_activation_threshold is not None:
+                self.config.voice_activation_threshold = max(0.0, min(float(voice_activation_threshold), 0.1))
+            if recognition_confidence_threshold is not None:
+                self.config.recognition_confidence_threshold = max(0.0, min(float(recognition_confidence_threshold), 1.0))
+            if wake_word_confidence_threshold is not None:
+                self.config.wake_word_confidence_threshold = max(0.0, min(float(wake_word_confidence_threshold), 1.0))
+            self.tts.set_output_device(output_device_index)
+            self._prepare_inputs()
+            self.voice_generation += 1
 
-        if was_listening and self.voice_recognizer:
-            self.set_listening(True)
-        elif was_listening:
+            if was_listening and self.voice_recognizer:
+                self.listening_enabled = True
+                self._start_voice_worker_locked()
+
+        if was_listening and not self.voice_recognizer:
             self.emit("status", "Прослушивание остановлено: после смены устройства микрофон недоступен.")
 
         return (
@@ -686,25 +701,33 @@ class FlagshipRuntime:
 
     def _voice_worker_loop(self) -> None:
         while not self.stop_event.is_set():
-            if not self.listening_enabled or not self.voice_recognizer:
+            recognizer = self.voice_recognizer
+            generation = self.voice_generation
+            cancel_event = self.voice_cancel_event
+            if not self.listening_enabled or not recognizer:
                 time.sleep(0.2)
                 continue
             if self.tts.is_busy():
                 try:
-                    interrupt_text = self.voice_recognizer.listen(
+                    interrupt_text = recognizer.listen(
                         1,
                         min_rms=max(0.01, self.config.voice_activation_threshold * 1.5),
                         min_confidence=self.config.wake_word_confidence_threshold,
+                        cancel_event=cancel_event,
                     )
                 except Exception:
+                    if cancel_event.is_set():
+                        return
                     time.sleep(0.2)
                     continue
+                if generation != self.voice_generation or cancel_event.is_set():
+                    return
                 if interrupt_text and self._detect_voice_interrupt(interrupt_text):
                     self.submit_text("гарфилд стоп", source="voice-interrupt")
                 continue
 
             try:
-                text = self.voice_recognizer.listen(
+                text = recognizer.listen(
                     self.config.recognition_timeout_sec,
                     min_rms=self.config.voice_activation_threshold,
                     min_confidence=(
@@ -712,12 +735,17 @@ class FlagshipRuntime:
                         if self.config.activation_mode == "wake_word" and time.time() >= self.wake_active_until
                         else self.config.recognition_confidence_threshold
                     ),
+                    cancel_event=cancel_event,
                 )
             except Exception as error:
+                if cancel_event.is_set() or generation != self.voice_generation:
+                    return
                 self.emit("status", f"Ошибка распознавания речи: {error}")
                 time.sleep(1)
                 continue
 
+            if generation != self.voice_generation or cancel_event.is_set():
+                return
             if text:
                 prepared = self._prepare_voice_text(text)
                 if prepared:
@@ -756,7 +784,19 @@ class FlagshipRuntime:
                 self.command_worker_last_activity = time.monotonic()
                 self.command_queue.task_done()
 
-    def _stop_voice_worker(self) -> None:
+    def _start_voice_worker_locked(self) -> None:
+        if self.voice_worker is not None and self.voice_worker.is_alive():
+            return
+        self.voice_cancel_event = threading.Event()
+        self.voice_worker = threading.Thread(
+            target=self._voice_worker_loop,
+            daemon=True,
+        )
+        self.voice_worker.start()
+
+    def _stop_voice_worker_locked(self) -> None:
+        self.listening_enabled = False
+        self.voice_cancel_event.set()
         worker = self.voice_worker
         if (
             worker
@@ -764,6 +804,11 @@ class FlagshipRuntime:
             and worker is not threading.current_thread()
         ):
             worker.join(timeout=5)
+        self.voice_worker = None
+
+    def _stop_voice_worker(self) -> None:
+        with self.audio_lock:
+            self._stop_voice_worker_locked()
 
     def _process_command(self, text: str, source: str) -> None:
         if looks_sensitive(text):
