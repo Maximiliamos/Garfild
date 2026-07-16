@@ -125,9 +125,13 @@ def test_llm_dialogue_is_added_to_history(tmp_path: Path) -> None:
     assert fake_llm.calls[0]["history"] == []
 
 
-def test_sensitive_llm_dialogue_is_redacted_in_history(tmp_path: Path) -> None:
+def test_sensitive_llm_dialogue_is_redacted_in_history(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     config = FakeConfig(skills_path=str(tmp_path / "skills.json"))
-    config.openai_api_key = "known-secret-value"
+    config.openai_api_key_env = "OPENAI_API_KEY"
+    monkeypatch.setenv("OPENAI_API_KEY", "known-secret-value")
     assistant = AssistantCore(config)
     assistant.llm_client = FakeLLM("Ключ known-secret-value или xai-abcdefghijklmnop использовать нельзя")
 

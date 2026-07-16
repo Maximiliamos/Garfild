@@ -24,6 +24,7 @@ except ImportError:
 
 import garfield_best as core
 from garfield_io import atomic_write_text
+from garfield_secrets import SecretStore, migrate_plaintext_secrets
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -54,15 +55,10 @@ class FlagshipConfig:
     llm_model: str = "meta/llama-3.1-8b-instruct"
     use_llm: bool = True
     nvidia_api_key_env: str = "NVIDIA_API_KEY"
-    nvidia_api_key: str = ""
     openai_api_key_env: str = "OPENAI_API_KEY"
-    openai_api_key: str = ""
     gemini_api_key_env: str = "GEMINI_API_KEY"
-    gemini_api_key: str = ""
     groq_api_key_env: str = "GROQ_API_KEY"
-    groq_api_key: str = ""
     xai_api_key_env: str = "XAI_API_KEY"
-    xai_api_key: str = ""
     enable_desktop_commands: bool = True
     allow_power_commands: bool = False
     input_mode: str = "auto"
@@ -90,11 +86,23 @@ class FlagshipConfig:
     piper_config_path: str = ""
 
     @classmethod
-    def load(cls, path: Path) -> "FlagshipConfig":
+    def load(
+        cls,
+        path: Path,
+        secret_store: SecretStore | None = None,
+    ) -> "FlagshipConfig":
         raw_data = {}
         if path.exists():
             with path.open("r", encoding="utf-8") as file:
                 raw_data = json.load(file)
+            if migrate_plaintext_secrets(
+                raw_data,
+                secret_store or SecretStore(),
+            ):
+                atomic_write_text(
+                    path,
+                    json.dumps(raw_data, ensure_ascii=False, indent=2) + "\n",
+                )
 
         data = dict(raw_data)
         if "use_llm" not in data and "use_ollama" in data:
@@ -108,15 +116,10 @@ class FlagshipConfig:
         env_llm_url = os.getenv("GARFIELD_LLM_API_URL", "").strip()
         env_llm_model = os.getenv("GARFIELD_LLM_MODEL", "").strip()
         env_nvidia_key_env = os.getenv("GARFIELD_NVIDIA_API_KEY_ENV", "").strip()
-        env_nvidia_api_key = os.getenv("GARFIELD_NVIDIA_API_KEY", "").strip()
         env_openai_key_env = os.getenv("GARFIELD_OPENAI_API_KEY_ENV", "").strip()
-        env_openai_api_key = os.getenv("GARFIELD_OPENAI_API_KEY", "").strip()
         env_gemini_key_env = os.getenv("GARFIELD_GEMINI_API_KEY_ENV", "").strip()
-        env_gemini_api_key = os.getenv("GARFIELD_GEMINI_API_KEY", "").strip()
         env_groq_key_env = os.getenv("GARFIELD_GROQ_API_KEY_ENV", "").strip()
-        env_groq_api_key = os.getenv("GARFIELD_GROQ_API_KEY", "").strip()
         env_xai_key_env = os.getenv("GARFIELD_XAI_API_KEY_ENV", "").strip()
-        env_xai_api_key = os.getenv("GARFIELD_XAI_API_KEY", "").strip()
         env_piper_model_path = os.getenv("GARFIELD_PIPER_MODEL_PATH", "").strip()
         env_piper_config_path = os.getenv("GARFIELD_PIPER_CONFIG_PATH", "").strip()
         env_skills_path = os.getenv("GARFIELD_SKILLS_PATH", "").strip()
@@ -131,24 +134,14 @@ class FlagshipConfig:
             config.llm_model = env_llm_model
         if env_nvidia_key_env:
             config.nvidia_api_key_env = env_nvidia_key_env
-        if env_nvidia_api_key:
-            config.nvidia_api_key = env_nvidia_api_key
         if env_openai_key_env:
             config.openai_api_key_env = env_openai_key_env
-        if env_openai_api_key:
-            config.openai_api_key = env_openai_api_key
         if env_gemini_key_env:
             config.gemini_api_key_env = env_gemini_key_env
-        if env_gemini_api_key:
-            config.gemini_api_key = env_gemini_api_key
         if env_groq_key_env:
             config.groq_api_key_env = env_groq_key_env
-        if env_groq_api_key:
-            config.groq_api_key = env_groq_api_key
         if env_xai_key_env:
             config.xai_api_key_env = env_xai_key_env
-        if env_xai_api_key:
-            config.xai_api_key = env_xai_api_key
         if env_piper_model_path:
             config.piper_model_path = env_piper_model_path
         if env_piper_config_path:

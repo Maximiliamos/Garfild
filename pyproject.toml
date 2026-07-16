@@ -18,6 +18,7 @@ dependencies = [
     "edge-tts>=7.2.8",
     "piper-tts>=1.4.1",
     "pathvalidate>=3.3.1",
+    "keyring>=25.6",
 ]
 
 [project.optional-dependencies]
@@ -38,6 +39,7 @@ py-modules = [
     "garfield_intents",
     "garfield_io",
     "garfield_privacy",
+    "garfield_secrets",
     "garfield_skills",
 ]
 

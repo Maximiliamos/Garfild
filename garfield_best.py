@@ -37,6 +37,7 @@ from garfield_intents import (
     requires_confirmation,
 )
 from garfield_privacy import looks_sensitive, redact_sensitive_text
+from garfield_secrets import SecretStore, migrate_plaintext_secrets
 from garfield_skills import SkillRegistry as SafeSkillRegistry
 
 try:
@@ -88,15 +89,10 @@ class AppConfig:
     llm_model: str = "meta/llama-3.1-8b-instruct"
     use_llm: bool = True
     nvidia_api_key_env: str = "NVIDIA_API_KEY"
-    nvidia_api_key: str = ""
     openai_api_key_env: str = "OPENAI_API_KEY"
-    openai_api_key: str = ""
     gemini_api_key_env: str = "GEMINI_API_KEY"
-    gemini_api_key: str = ""
     groq_api_key_env: str = "GROQ_API_KEY"
-    groq_api_key: str = ""
     xai_api_key_env: str = "XAI_API_KEY"
-    xai_api_key: str = ""
     enable_desktop_commands: bool = True
     allow_power_commands: bool = False
     input_mode: str = "auto"
@@ -121,11 +117,25 @@ class AppConfig:
     piper_config_path: str = ""
 
     @classmethod
-    def load(cls, path: Path) -> "AppConfig":
+    def load(
+        cls,
+        path: Path,
+        secret_store: SecretStore | None = None,
+    ) -> "AppConfig":
         raw_data = {}
         if path.exists():
             with path.open("r", encoding="utf-8") as file:
                 raw_data = json.load(file)
+            if migrate_plaintext_secrets(
+                raw_data,
+                secret_store or SecretStore(),
+            ):
+                from garfield_io import atomic_write_text
+
+                atomic_write_text(
+                    path,
+                    json.dumps(raw_data, ensure_ascii=False, indent=2) + "\n",
+                )
 
         data = dict(raw_data)
         if "use_llm" not in data and "use_ollama" in data:
@@ -140,15 +150,10 @@ class AppConfig:
         env_llm_url = os.getenv("GARFIELD_LLM_API_URL", "").strip()
         env_llm_model = os.getenv("GARFIELD_LLM_MODEL", "").strip()
         env_nvidia_key_env = os.getenv("GARFIELD_NVIDIA_API_KEY_ENV", "").strip()
-        env_nvidia_api_key = os.getenv("GARFIELD_NVIDIA_API_KEY", "").strip()
         env_openai_key_env = os.getenv("GARFIELD_OPENAI_API_KEY_ENV", "").strip()
-        env_openai_api_key = os.getenv("GARFIELD_OPENAI_API_KEY", "").strip()
         env_gemini_key_env = os.getenv("GARFIELD_GEMINI_API_KEY_ENV", "").strip()
-        env_gemini_api_key = os.getenv("GARFIELD_GEMINI_API_KEY", "").strip()
         env_groq_key_env = os.getenv("GARFIELD_GROQ_API_KEY_ENV", "").strip()
-        env_groq_api_key = os.getenv("GARFIELD_GROQ_API_KEY", "").strip()
         env_xai_key_env = os.getenv("GARFIELD_XAI_API_KEY_ENV", "").strip()
-        env_xai_api_key = os.getenv("GARFIELD_XAI_API_KEY", "").strip()
         env_piper_model_path = os.getenv("GARFIELD_PIPER_MODEL_PATH", "").strip()
         env_piper_config_path = os.getenv("GARFIELD_PIPER_CONFIG_PATH", "").strip()
         env_skills_path = os.getenv("GARFIELD_SKILLS_PATH", "").strip()
@@ -163,24 +168,14 @@ class AppConfig:
             config.llm_model = env_llm_model
         if env_nvidia_key_env:
             config.nvidia_api_key_env = env_nvidia_key_env
-        if env_nvidia_api_key:
-            config.nvidia_api_key = env_nvidia_api_key
         if env_openai_key_env:
             config.openai_api_key_env = env_openai_key_env
-        if env_openai_api_key:
-            config.openai_api_key = env_openai_api_key
         if env_gemini_key_env:
             config.gemini_api_key_env = env_gemini_key_env
-        if env_gemini_api_key:
-            config.gemini_api_key = env_gemini_api_key
         if env_groq_key_env:
             config.groq_api_key_env = env_groq_key_env
-        if env_groq_api_key:
-            config.groq_api_key = env_groq_api_key
         if env_xai_key_env:
             config.xai_api_key_env = env_xai_key_env
-        if env_xai_api_key:
-            config.xai_api_key = env_xai_api_key
         if env_piper_model_path:
             config.piper_model_path = env_piper_model_path
         if env_piper_config_path:
@@ -1199,53 +1194,69 @@ def default_llm_api_url(provider: str, current_url: str = "") -> str:
     return default_url if current_url in known_urls else current_url
 
 
-def _config_api_key(config: object, provider: str) -> tuple[str, str]:
+def _config_api_key_env(config: object, provider: str) -> str:
     provider_key = normalize_llm_provider(provider)
     env_name = str(LLM_PROVIDERS[provider_key]["api_key_env"])
-    if provider_key == "nvidia":
-        return getattr(config, "nvidia_api_key_env", env_name), getattr(config, "nvidia_api_key", "")
-    if provider_key == "openai":
-        return getattr(config, "openai_api_key_env", env_name), getattr(config, "openai_api_key", "")
-    if provider_key == "gemini":
-        return getattr(config, "gemini_api_key_env", env_name), getattr(config, "gemini_api_key", "")
-    if provider_key == "groq":
-        return getattr(config, "groq_api_key_env", env_name), getattr(config, "groq_api_key", "")
-    if provider_key == "xai":
-        return getattr(config, "xai_api_key_env", env_name), getattr(config, "xai_api_key", "")
-    return env_name, ""
+    return str(getattr(config, f"{provider_key}_api_key_env", env_name))
 
 
-def create_llm_client(config: object) -> "LLMClient | None":
+def create_llm_client(
+    config: object,
+    secret_store: SecretStore | None = None,
+) -> "LLMClient | None":
     if not getattr(config, "use_llm", True):
         return None
     provider = normalize_llm_provider(getattr(config, "llm_provider", "nvidia"))
     model = getattr(config, "llm_model", "") or default_llm_model(provider)
     api_url = default_llm_api_url(provider, getattr(config, "llm_api_url", ""))
-    api_key_env, api_key = _config_api_key(config, provider)
-    return LLMClient(provider, api_url, model, api_key_env, api_key)
+    api_key_env = _config_api_key_env(config, provider)
+    return LLMClient(
+        provider,
+        api_url,
+        model,
+        api_key_env,
+        secret_store=secret_store,
+    )
 
 
 class LLMClient:
-    def __init__(self, provider: str, api_url: str, model: str, api_key_env: str, api_key: str = "") -> None:
+    def __init__(
+        self,
+        provider: str,
+        api_url: str,
+        model: str,
+        api_key_env: str,
+        *,
+        secret_store: SecretStore | None = None,
+    ) -> None:
         self.provider = normalize_llm_provider(provider)
         self.api_url = default_llm_api_url(self.provider, api_url)
         self.model = model or default_llm_model(self.provider)
         self.api_key_env = api_key_env or str(LLM_PROVIDERS[self.provider]["api_key_env"])
-        self.api_key = api_key.strip()
+        self.secret_store = secret_store or SecretStore()
         self.api_type = str(LLM_PROVIDERS[self.provider]["api"])
         self.session = requests.Session()
 
     def is_available(self) -> bool:
-        return bool(os.getenv(self.api_key_env, "").strip() or self.api_key)
+        try:
+            return bool(self._stored_api_key())
+        except Exception:
+            return False
 
     def _api_key(self) -> str:
-        key = os.getenv(self.api_key_env, "").strip() or self.api_key
+        key = self._stored_api_key()
         if not key:
             raise RuntimeError(
                 f"Не задан ключ {describe_llm_provider(self.provider)} API. "
                 f"Установите переменную окружения {self.api_key_env}."
             )
         return key
+
+    def _stored_api_key(self) -> str:
+        env_key = os.getenv(self.api_key_env, "").strip()
+        if env_key:
+            return env_key
+        return self.secret_store.get(self.provider)
 
     def _messages(self, user_text: str, assistant_name: str, history: ConversationHistory) -> list[dict[str, str]]:
         messages = [
@@ -1352,8 +1363,21 @@ class LLMClient:
 
 
 class NVIDIAClient(LLMClient):
-    def __init__(self, api_url: str, model: str, api_key_env: str, api_key: str = "") -> None:
-        super().__init__("nvidia", api_url, model, api_key_env, api_key)
+    def __init__(
+        self,
+        api_url: str,
+        model: str,
+        api_key_env: str,
+        *,
+        secret_store: SecretStore | None = None,
+    ) -> None:
+        super().__init__(
+            "nvidia",
+            api_url,
+            model,
+            api_key_env,
+            secret_store=secret_store,
+        )
 
 
 class DesktopController:
@@ -1934,13 +1958,18 @@ class AssistantCore:
         secrets: list[str] = []
         for provider in ("nvidia", "openai", "gemini", "groq", "xai"):
             env_name = str(getattr(self.config, f"{provider}_api_key_env", "")).strip()
-            explicit_key = str(getattr(self.config, f"{provider}_api_key", "")).strip()
             if env_name:
                 env_key = os.getenv(env_name, "").strip()
                 if env_key:
                     secrets.append(env_key)
-            if explicit_key:
-                secrets.append(explicit_key)
+            client = self.llm_client
+            if client and getattr(client, "provider", "") == provider:
+                try:
+                    stored_key = client.secret_store.get(provider).strip()
+                except Exception:
+                    stored_key = ""
+                if stored_key:
+                    secrets.append(stored_key)
         return secrets
 
     def _is_addressed_to_assistant(self, text: str) -> bool:

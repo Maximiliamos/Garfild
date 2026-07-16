@@ -39,7 +39,6 @@ class FlagshipConfig:
     llm_model: str = "meta/llama-3.1-8b-instruct"
     use_llm: bool = True
     nvidia_api_key_env: str = "NVIDIA_API_KEY"
-    nvidia_api_key: str = ""
     enable_desktop_commands: bool = True
     allow_power_commands: bool = False
     input_mode: str = "auto"
@@ -78,7 +77,6 @@ class FlagshipConfig:
         env_llm_url = os.getenv("GARFIELD_LLM_API_URL", "").strip()
         env_llm_model = os.getenv("GARFIELD_LLM_MODEL", "").strip()
         env_nvidia_key_env = os.getenv("GARFIELD_NVIDIA_API_KEY_ENV", "").strip()
-        env_nvidia_api_key = os.getenv("GARFIELD_NVIDIA_API_KEY", "").strip()
         env_piper_model_path = os.getenv("GARFIELD_PIPER_MODEL_PATH", "").strip()
         env_piper_config_path = os.getenv("GARFIELD_PIPER_CONFIG_PATH", "").strip()
         env_skills_path = os.getenv("GARFIELD_SKILLS_PATH", "").strip()
@@ -91,8 +89,6 @@ class FlagshipConfig:
             config.llm_model = env_llm_model
         if env_nvidia_key_env:
             config.nvidia_api_key_env = env_nvidia_key_env
-        if env_nvidia_api_key:
-            config.nvidia_api_key = env_nvidia_api_key
         if env_piper_model_path:
             config.piper_model_path = env_piper_model_path
         if env_piper_config_path:

@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 import garfield_best as core
 from garfield_io import atomic_write_text
+from garfield_secrets import PROVIDERS, SecretStore
 
 
 @dataclass
@@ -84,10 +85,12 @@ class RuntimeAdapter:
         *,
         save_config: Callable[[Any], None],
         paths: DashboardPaths,
+        secret_store: SecretStore | None = None,
     ) -> None:
         self.runtime = runtime
         self.save_config_callback = save_config
         self.paths = paths
+        self.secret_store = secret_store or SecretStore()
         self.input_options: dict[str, int | None] = {}
         self.output_options: dict[str, int | None] = {}
         self._mic_monitor: core.AudioLevelMonitor | None = None
@@ -120,6 +123,35 @@ class RuntimeAdapter:
 
     def save_current_config(self) -> None:
         self.save_config_callback(self.config)
+
+    def secret_statuses(self) -> dict[str, bool]:
+        statuses: dict[str, bool] = {}
+        for provider in PROVIDERS:
+            try:
+                statuses[provider] = self.secret_store.is_configured(provider)
+            except Exception:
+                statuses[provider] = False
+        return statuses
+
+    def save_secret(self, provider: str, value: str) -> str:
+        if provider not in PROVIDERS:
+            raise ValueError(f"Неизвестный провайдер: {provider}")
+        self.secret_store.set(provider, value)
+        self.runtime.assistant.llm_client = core.create_llm_client(
+            self.config,
+            secret_store=self.secret_store,
+        )
+        return f"API-ключ {provider} сохранён в безопасном хранилище."
+
+    def delete_secret(self, provider: str) -> str:
+        if provider not in PROVIDERS:
+            raise ValueError(f"Неизвестный провайдер: {provider}")
+        self.secret_store.delete(provider)
+        self.runtime.assistant.llm_client = core.create_llm_client(
+            self.config,
+            secret_store=self.secret_store,
+        )
+        return f"Сохранённый API-ключ {provider} удалён."
 
     def save_session_history(self) -> Path:
         return self.runtime._save_session_history()
@@ -324,11 +356,6 @@ class RuntimeAdapter:
         cfg.llm_api_url = values["llm_api_url"].strip()
         cfg.llm_api_url = core.default_llm_api_url(cfg.llm_provider, cfg.llm_api_url)
         cfg.llm_model = values["llm_model"].strip() or core.default_llm_model(cfg.llm_provider)
-        cfg.nvidia_api_key = values["nvidia_api_key"].strip()
-        cfg.openai_api_key = values["openai_api_key"].strip()
-        cfg.gemini_api_key = values["gemini_api_key"].strip()
-        cfg.groq_api_key = values["groq_api_key"].strip()
-        cfg.xai_api_key = values["xai_api_key"].strip()
         cfg.remember_turns = max(1, int(values["remember_turns"]))
         cfg.max_cached_answers = max(1, int(values["max_cached_answers"]))
         cfg.skills_path = values["skills_path"].strip()
@@ -340,7 +367,10 @@ class RuntimeAdapter:
         self.runtime.tts.speaker.piper_config_path = cfg.piper_config_path
         self.runtime.assistant.history.max_turns = cfg.remember_turns
         self.runtime.assistant.desktop.allow_power_commands = cfg.allow_power_commands
-        self.runtime.assistant.llm_client = core.create_llm_client(cfg)
+        self.runtime.assistant.llm_client = core.create_llm_client(
+            cfg,
+            secret_store=self.secret_store,
+        )
         self.runtime.assistant.skills.path = Path(cfg.skills_path)
         self.runtime.assistant.skills.reload()
         self.save_current_config()

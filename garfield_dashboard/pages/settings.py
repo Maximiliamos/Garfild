@@ -7,6 +7,7 @@ import tkinter as tk
 import customtkinter as ctk
 
 import garfield_best as core
+from garfield_secrets import PROVIDERS
 
 from ..components import ConfirmDialog, action_button, card, labeled_input
 from ..theme import COLORS, FONTS
@@ -47,6 +48,7 @@ class SettingsPage(ctk.CTkFrame):
             "skills_path": tk.StringVar(),
         }
         self.model_menu: ctk.CTkOptionMenu | None = None
+        self.secret_status_labels: dict[str, ctk.CTkLabel] = {}
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
@@ -105,11 +107,16 @@ class SettingsPage(ctk.CTkFrame):
         ); row += 1
         self.model_menu = self._option("Модель ответа", row, self.vars["llm_model"], core.llm_model_ids("nvidia")); row += 1
         labeled_input(self.form, "API URL", row, self.vars["llm_api_url"]); row += 1
-        labeled_input(self.form, "NVIDIA API key", row, self.vars["nvidia_api_key"], show="*"); row += 1
-        labeled_input(self.form, "OpenAI API key", row, self.vars["openai_api_key"], show="*"); row += 1
-        labeled_input(self.form, "Gemini API key", row, self.vars["gemini_api_key"], show="*"); row += 1
-        labeled_input(self.form, "Groq Cloud API key", row, self.vars["groq_api_key"], show="*"); row += 1
-        labeled_input(self.form, "xAI Grok API key", row, self.vars["xai_api_key"], show="*"); row += 1
+        provider_labels = {
+            "nvidia": "NVIDIA API key",
+            "openai": "OpenAI API key",
+            "gemini": "Gemini API key",
+            "groq": "Groq Cloud API key",
+            "xai": "xAI Grok API key",
+        }
+        for provider in PROVIDERS:
+            self._secret_input(provider_labels[provider], provider, row)
+            row += 1
 
         row = self._section("Память и навыки", row)
         labeled_input(self.form, "Количество ходов памяти", row, self.vars["remember_turns"]); row += 1
@@ -173,6 +180,48 @@ class SettingsPage(ctk.CTkFrame):
             pady=8,
         )
 
+    def _secret_input(self, label: str, provider: str, row: int) -> None:
+        ctk.CTkLabel(
+            self.form,
+            text=label,
+            anchor="w",
+            text_color=COLORS["text"],
+            font=FONTS["body_bold"],
+        ).grid(row=row, column=0, sticky="w", padx=(0, 16), pady=8)
+        controls = ctk.CTkFrame(self.form, fg_color="transparent")
+        controls.grid(row=row, column=1, sticky="ew", pady=8)
+        controls.grid_columnconfigure(0, weight=1)
+        entry = ctk.CTkEntry(
+            controls,
+            textvariable=self.vars[f"{provider}_api_key"],
+            show="*",
+            fg_color=COLORS["input"],
+            text_color=COLORS["text"],
+            height=36,
+        )
+        entry.grid(row=0, column=0, sticky="ew")
+        status = ctk.CTkLabel(
+            controls,
+            text="",
+            text_color=COLORS["text_secondary"],
+            width=105,
+        )
+        status.grid(row=0, column=1, padx=8)
+        self.secret_status_labels[provider] = status
+        action_button(
+            controls,
+            "Сохранить",
+            lambda p=provider: self.save_secret(p),
+            width=90,
+        ).grid(row=0, column=2, padx=(0, 6))
+        action_button(
+            controls,
+            "Удалить",
+            lambda p=provider: self.delete_secret(p),
+            tone="danger",
+            width=80,
+        ).grid(row=0, column=3)
+
     def load_from_config(self) -> None:
         cfg = self.adapter.config
         values = {
@@ -194,17 +243,18 @@ class SettingsPage(ctk.CTkFrame):
             "llm_provider": core.normalize_llm_provider(getattr(cfg, "llm_provider", "nvidia")),
             "llm_api_url": cfg.llm_api_url,
             "llm_model": cfg.llm_model,
-            "nvidia_api_key": cfg.nvidia_api_key,
-            "openai_api_key": cfg.openai_api_key,
-            "gemini_api_key": cfg.gemini_api_key,
-            "groq_api_key": cfg.groq_api_key,
-            "xai_api_key": cfg.xai_api_key,
+            "nvidia_api_key": "",
+            "openai_api_key": "",
+            "gemini_api_key": "",
+            "groq_api_key": "",
+            "xai_api_key": "",
             "remember_turns": str(cfg.remember_turns),
             "max_cached_answers": str(cfg.max_cached_answers),
             "skills_path": cfg.skills_path,
         }
         for key, value in values.items():
             self.vars[key].set(value)
+        self._refresh_secret_statuses()
         self._refresh_model_options()
 
     def _on_provider_change(self, _value: str | None = None) -> None:
@@ -221,11 +271,60 @@ class SettingsPage(ctk.CTkFrame):
             self.vars["llm_model"].set(core.default_llm_model(provider))
 
     def _collect(self) -> dict[str, object]:
-        values = {key: variable.get() for key, variable in self.vars.items()}
+        secret_fields = {f"{provider}_api_key" for provider in PROVIDERS}
+        values = {
+            key: variable.get()
+            for key, variable in self.vars.items()
+            if key not in secret_fields
+        }
         values["remember_turns"] = int(str(values["remember_turns"]).strip())
         values["max_cached_answers"] = int(str(values["max_cached_answers"]).strip())
         values["command_confirmation_timeout_sec"] = int(str(values["command_confirmation_timeout_sec"]).strip())
         return values
+
+    def _refresh_secret_statuses(self) -> None:
+        statuses = self.adapter.secret_statuses()
+        for provider, label in self.secret_status_labels.items():
+            label.configure(
+                text="[сохранён]" if statuses.get(provider) else "[не задан]",
+                text_color=(
+                    COLORS["success"]
+                    if statuses.get(provider)
+                    else COLORS["text_secondary"]
+                ),
+            )
+
+    def save_secret(self, provider: str) -> None:
+        value = str(self.vars[f"{provider}_api_key"].get()).strip()
+        if not value:
+            self.app.show_notice("Введите новый API-ключ.", "warning")
+            return
+        try:
+            message = self.adapter.save_secret(provider, value)
+            self.vars[f"{provider}_api_key"].set("")
+            self._refresh_secret_statuses()
+            self.app.show_notice(message, "success")
+        except Exception as error:
+            self.app.show_notice(f"Не удалось сохранить API-ключ: {error}", "danger")
+
+    def delete_secret(self, provider: str) -> None:
+        def delete() -> None:
+            try:
+                message = self.adapter.delete_secret(provider)
+                self.vars[f"{provider}_api_key"].set("")
+                self._refresh_secret_statuses()
+                self.app.show_notice(message, "warning")
+            except Exception as error:
+                self.app.show_notice(f"Не удалось удалить API-ключ: {error}", "danger")
+
+        ConfirmDialog(
+            self,
+            "Удалить API-ключ",
+            f"Удалить сохранённый ключ {provider} из безопасного хранилища?",
+            delete,
+            confirm_text="Удалить",
+            danger=True,
+        )
 
     def save_settings(self) -> None:
         try:
