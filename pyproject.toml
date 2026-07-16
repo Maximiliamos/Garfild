@@ -65,6 +65,8 @@ exclude = [
     "garfield_best.py",
     "garfield_flagship.py",
     "garfield_flagship_legacy_tk.py",
+    "garfield/conversation/assistant.py",
+    "garfield/runtime/runtime.py",
     "garfield_dashboard",
 ]
 

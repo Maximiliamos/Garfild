@@ -12,6 +12,22 @@ def test_core_imports() -> None:
     assert garfield_flagship is not None
 
 
+def test_packaged_api_preserves_legacy_import_identity() -> None:
+    import garfield_best
+    import garfield_flagship
+    from garfield.audio import Speaker, VoiceRecognizer
+    from garfield.config import AppConfig, FlagshipConfig
+    from garfield.conversation import AssistantCore
+    from garfield.runtime import FlagshipRuntime
+
+    assert AppConfig is garfield_best.AppConfig
+    assert AssistantCore is garfield_best.AssistantCore
+    assert VoiceRecognizer is garfield_best.VoiceRecognizer
+    assert Speaker is garfield_best.Speaker
+    assert FlagshipConfig is garfield_flagship.FlagshipConfig
+    assert FlagshipRuntime is garfield_flagship.FlagshipRuntime
+
+
 def test_config_load_ignores_unknown_fields(tmp_path: Path) -> None:
     from garfield_flagship import FlagshipConfig
 
