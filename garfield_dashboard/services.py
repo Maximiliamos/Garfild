@@ -444,7 +444,7 @@ class RuntimeAdapter:
         if not client or not client.is_available():
             return "ИИ-провайдер недоступен: не задан ключ или отключен LLM."
         started = time.time()
-        answer = client.ask(
+        result = client.ask(
             "Ответь одним словом: готов.",
             self.config.assistant_name,
             self.runtime.assistant.history,
@@ -453,7 +453,7 @@ class RuntimeAdapter:
         )
         elapsed = time.time() - started
         provider = core.describe_llm_provider(self.config.llm_provider)
-        return f"{provider} отвечает за {elapsed:.1f} сек. Ответ: {answer[:80] or 'пусто'}"
+        return f"{provider} отвечает за {elapsed:.1f} сек. Ответ: {result.text[:80]}"
 
     def check_nvidia_connection(self) -> str:
         return self.check_llm_connection()

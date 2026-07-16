@@ -37,6 +37,20 @@ from garfield_intents import (
     is_confirmation,
     requires_confirmation,
 )
+from garfield_llm import (
+    CacheEntry,
+    LLMAuthenticationError,
+    LLMEmptyResponseError,
+    LLMNetworkError,
+    LLMRateLimitError,
+    LLMResponseFormatError,
+    LLMResult,
+    build_answer_cache_key,
+    is_cache_entry_valid,
+    raise_for_llm_status,
+    require_non_empty_string,
+    validate_response_size,
+)
 from garfield_privacy import (
     SecretRedactingFilter,
     looks_sensitive,
@@ -114,6 +128,7 @@ class AppConfig:
     screen_hints_enabled: bool = True
     remember_turns: int = 6
     max_cached_answers: int = 120
+    answer_cache_ttl_sec: int = 900
     persist_session_history: bool = False
     redact_sensitive_logs: bool = True
     history_retention_days: int = 7
@@ -1293,15 +1308,18 @@ class LLMClient:
             return env_key
         return self.secret_store.get(self.provider)
 
+    def system_prompt(self, assistant_name: str) -> str:
+        return (
+            f"Ты {assistant_name}, надежный русскоязычный голосовой ассистент. "
+            "Отвечай кратко, по делу и естественно. "
+            "Не используй списки без необходимости."
+        )
+
     def _messages(self, user_text: str, assistant_name: str, history: ConversationHistory) -> list[dict[str, str]]:
         messages = [
             {
                 "role": "system",
-                "content": (
-                    f"Ты {assistant_name}, надежный русскоязычный голосовой ассистент. "
-                    "Отвечай кратко, по делу и естественно. "
-                    "Не используй списки без необходимости."
-                ),
+                "content": self.system_prompt(assistant_name),
             }
         ]
         messages.extend(history.as_messages())
@@ -1315,11 +1333,24 @@ class LLMClient:
         history: ConversationHistory,
         max_tokens: int = 450,
         timeout_sec: int = 18,
-    ) -> str:
+    ) -> LLMResult:
         messages = self._messages(user_text, assistant_name, history)
-        if self.api_type == "gemini-generate-content":
-            return self._ask_gemini(messages, max_tokens=max_tokens, timeout_sec=timeout_sec)
-        return self._ask_openai_compatible(messages, max_tokens=max_tokens, timeout_sec=timeout_sec)
+        try:
+            if self.api_type == "gemini-generate-content":
+                text = self._ask_gemini(
+                    messages,
+                    max_tokens=max_tokens,
+                    timeout_sec=timeout_sec,
+                )
+            else:
+                text = self._ask_openai_compatible(
+                    messages,
+                    max_tokens=max_tokens,
+                    timeout_sec=timeout_sec,
+                )
+        except requests.RequestException as error:
+            raise LLMNetworkError("Сетевая ошибка при обращении к LLM.") from error
+        return LLMResult(text=text, provider=self.provider, model=self.model)
 
     def _ask_openai_compatible(self, messages: list[dict[str, str]], max_tokens: int, timeout_sec: int) -> str:
         payload = {
@@ -1343,13 +1374,23 @@ class LLMClient:
             json=payload,
             timeout=(5, timeout_sec),
         )
-        response.raise_for_status()
-
-        data = response.json()
-        choices = data.get("choices", [])
-        if not choices:
-            return ""
-        return choices[0].get("message", {}).get("content", "").strip()
+        raise_for_llm_status(response)
+        validate_response_size(response)
+        try:
+            data = response.json()
+            choices = data["choices"]
+            content = choices[0]["message"]["content"]
+        except (
+            json.JSONDecodeError,
+            KeyError,
+            IndexError,
+            TypeError,
+            ValueError,
+        ) as error:
+            raise LLMResponseFormatError(
+                "LLM вернула ответ с неправильной структурой."
+            ) from error
+        return require_non_empty_string(content, "choices[0].message.content")
 
     def _ask_gemini(self, messages: list[dict[str, str]], max_tokens: int, timeout_sec: int) -> str:
         max_output_tokens = max(max_tokens, 128)
@@ -1387,14 +1428,27 @@ class LLMClient:
             },
             timeout=(5, timeout_sec),
         )
-        response.raise_for_status()
-        data = response.json()
-        for candidate in data.get("candidates", []):
-            parts = candidate.get("content", {}).get("parts", [])
-            text = "".join(part.get("text", "") for part in parts if isinstance(part, dict)).strip()
-            if text:
-                return text
-        return ""
+        raise_for_llm_status(response)
+        validate_response_size(response)
+        try:
+            data = response.json()
+            parts = data["candidates"][0]["content"]["parts"]
+            text = "".join(
+                require_non_empty_string(part["text"], "parts[].text")
+                for part in parts
+                if isinstance(part, dict)
+            )
+        except (
+            json.JSONDecodeError,
+            KeyError,
+            IndexError,
+            TypeError,
+            ValueError,
+        ) as error:
+            raise LLMResponseFormatError(
+                "LLM вернула ответ с неправильной структурой."
+            ) from error
+        return require_non_empty_string(text, "candidates[0].content.parts")
 
 
 class NVIDIAClient(LLMClient):
@@ -1871,7 +1925,7 @@ class AssistantCore:
         self.last_answer = ""
         self.last_user_command = ""
         self.previous_user_command = ""
-        self.answer_cache: OrderedDict[str, str] = OrderedDict()
+        self.answer_cache: OrderedDict[str, CacheEntry] = OrderedDict()
         self.skills = SafeSkillRegistry(
             Path(config.skills_path),
             self.actions,
@@ -2439,27 +2493,59 @@ class AssistantCore:
         )
 
     def _ask_llm_or_fallback(self, text: str) -> str:
-        if text in self.answer_cache:
-            self.answer_cache.move_to_end(text)
-            return self.answer_cache[text]
-
+        sensitive = looks_sensitive(text)
         if self.llm_client and self.llm_client.is_available():
+            cache_key = build_answer_cache_key(
+                provider=self.llm_client.provider,
+                model=self.llm_client.model,
+                system_prompt=self.llm_client.system_prompt(
+                    self.config.assistant_name
+                ),
+                history=self.history.as_messages(),
+                user_text=text,
+            )
+            entry = self.answer_cache.get(cache_key)
+            if (
+                not sensitive
+                and entry
+                and is_cache_entry_valid(
+                    entry,
+                    self.config.answer_cache_ttl_sec,
+                )
+            ):
+                self.answer_cache.move_to_end(cache_key)
+                return entry.answer
+            if entry:
+                self.answer_cache.pop(cache_key, None)
+
             try:
-                answer = self.llm_client.ask(text, self.config.assistant_name, self.history)
-                if answer:
-                    self._remember_answer(text, answer)
-                    return answer
-            except requests.RequestException as error:
-                provider = describe_llm_provider(getattr(self.llm_client, "provider", "nvidia"))
-                logging.warning("%s API временно недоступен: %s", provider, error)
+                result = self.llm_client.ask(
+                    text,
+                    self.config.assistant_name,
+                    self.history,
+                )
+                if not sensitive:
+                    self._remember_answer(cache_key, result.text)
+                return result.text
+            except LLMAuthenticationError:
+                logging.warning("LLM отклонила учётные данные.")
+            except LLMRateLimitError:
+                logging.warning("Достигнут лимит запросов к LLM.")
+            except LLMEmptyResponseError:
+                logging.warning("LLM вернула пустой ответ.")
+            except LLMResponseFormatError:
+                logging.warning("LLM вернула ответ неправильной структуры.")
+            except LLMNetworkError:
+                logging.warning("LLM временно недоступна из-за сетевой ошибки.")
 
-        answer = self._fallback_answer(text)
-        self._remember_answer(text, answer)
-        return answer
+        return self._fallback_answer(text)
 
-    def _remember_answer(self, prompt: str, answer: str) -> None:
-        self.answer_cache[prompt] = answer
-        self.answer_cache.move_to_end(prompt)
+    def _remember_answer(self, cache_key: str, answer: str) -> None:
+        self.answer_cache[cache_key] = CacheEntry(
+            answer=answer,
+            created_at=time.monotonic(),
+        )
+        self.answer_cache.move_to_end(cache_key)
         while len(self.answer_cache) > self.config.max_cached_answers:
             self.answer_cache.popitem(last=False)
 

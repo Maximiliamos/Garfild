@@ -84,6 +84,7 @@ class FlagshipConfig:
     auto_listen: bool = True
     tts_enabled: bool = True
     max_cached_answers: int = 120
+    answer_cache_ttl_sec: int = 900
     persist_session_history: bool = False
     redact_sensitive_logs: bool = True
     history_retention_days: int = 7

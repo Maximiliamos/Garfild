@@ -40,6 +40,7 @@
   "auto_listen": true,
   "tts_enabled": true,
   "max_cached_answers": 120,
+  "answer_cache_ttl_sec": 900,
   "persist_session_history": false,
   "redact_sensitive_logs": true,
   "history_retention_days": 7,
