@@ -29,6 +29,26 @@ def test_power_command_stays_disabled_by_default(tmp_path: Path) -> None:
     assert assistant.history.turns == []
 
 
+def test_negated_close_window_does_not_execute_desktop_action(monkeypatch, tmp_path: Path) -> None:
+    config = FakeConfig(
+        skills_path=str(tmp_path / "skills.json"),
+        enable_desktop_commands=True,
+    )
+    assistant = AssistantCore(config)
+    called = False
+
+    def close_window() -> str:
+        nonlocal called
+        called = True
+        return "Закрываю окно."
+
+    monkeypatch.setattr(assistant.desktop, "close_window", close_window)
+
+    assistant.handle("не закрывай окно")
+
+    assert called is False
+
+
 def test_local_command_is_not_added_to_llm_history(tmp_path: Path) -> None:
     assistant = AssistantCore(FakeConfig(skills_path=str(tmp_path / "skills.json")))
 

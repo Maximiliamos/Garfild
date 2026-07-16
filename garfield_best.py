@@ -24,6 +24,7 @@ from urllib.parse import quote_plus
 
 import requests
 
+from garfield_intents import Intent, IntentRouter
 from garfield_privacy import looks_sensitive, redact_sensitive_text
 
 try:
@@ -1822,6 +1823,7 @@ class AssistantCore:
         self.previous_user_command = ""
         self.answer_cache: OrderedDict[str, str] = OrderedDict()
         self.skills = SkillRegistry(Path(config.skills_path))
+        self.intent_router = IntentRouter()
 
     def handle(self, raw_text: str) -> Optional[AssistantReply]:
         text = normalize_text(raw_text)
@@ -1848,6 +1850,10 @@ class AssistantCore:
             if reply:
                 return reply
 
+        intent = self.intent_router.route(text)
+        if intent is not None:
+            return self._handle_intent(intent)
+
         builtin_reply = self._handle_builtin_command(text)
         if builtin_reply:
             return builtin_reply
@@ -1867,6 +1873,48 @@ class AssistantCore:
             ),
             sensitive=sensitive,
         )
+
+    def _handle_intent(self, intent: Intent) -> AssistantReply:
+        if intent.intent_id == "window.close":
+            disabled = self._desktop_unavailable()
+            if disabled:
+                return disabled
+            return AssistantReply(self.desktop.close_window())
+
+        if intent.intent_id == "text.type":
+            disabled = self._desktop_unavailable()
+            if disabled:
+                return disabled
+            return AssistantReply(
+                self.desktop.type_text(intent.arguments["text"]),
+                sensitive=True,
+                action_id=intent.intent_id,
+            )
+
+        if intent.intent_id == "web.search":
+            return AssistantReply(
+                self.desktop.search_web(intent.arguments["query"]),
+                action_id=intent.intent_id,
+            )
+
+        power_kinds = {
+            "system.shutdown": "shutdown",
+            "system.restart": "restart",
+            "system.sleep": "sleep",
+        }
+        if intent.intent_id in power_kinds:
+            if not self.config.allow_power_commands:
+                return AssistantReply(
+                    "Силовые команды сейчас отключены в конфиге ради безопасности."
+                )
+            kind = power_kinds[intent.intent_id]
+            self.pending_power_action = PendingPowerAction(kind, time.time())
+            return AssistantReply(
+                self._power_confirmation_text(self._power_action_label(kind)),
+                action_id=intent.intent_id,
+            )
+
+        return AssistantReply("Команда пока не поддерживается.", should_speak=False)
 
     def _remember_reply(self, user_text: str, reply: AssistantReply) -> None:
         if not reply.text or reply.history_policy is HistoryPolicy.EXCLUDE:
