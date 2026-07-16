@@ -1,11 +1,15 @@
 {
+  "version": 2,
   "skills": [
     {
       "id": "example_search",
       "phrases": [
         "гугл {query}"
       ],
-      "action": "search_web",
+      "action_id": "web.search",
+      "arguments": {
+        "query": "{query}"
+      },
       "response": "Ищу: {query}."
     },
     {
@@ -13,8 +17,10 @@
       "phrases": [
         "открой мой сайт"
       ],
-      "action": "open_url",
-      "target": "https://example.com",
+      "action_id": "web.open",
+      "arguments": {
+        "url": "https://example.com"
+      },
       "response": "Открываю сайт."
     },
     {
@@ -22,8 +28,10 @@
       "phrases": [
         "открой калькулятор"
       ],
-      "action": "run",
-      "target": "calc.exe",
+      "action_id": "application.open",
+      "arguments": {
+        "app_id": "calculator"
+      },
       "response": "Открываю калькулятор."
     }
   ]

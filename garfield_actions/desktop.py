@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import webbrowser
+from pathlib import Path
 from urllib.parse import quote_plus
 
 from .models import ActionContext, ActionResult
@@ -86,3 +87,26 @@ def open_web(
     del context
     webbrowser.open(url)
     return ActionResult(True, "Открываю веб-страницу.")
+
+
+def open_project_file(
+    context: ActionContext,
+    *,
+    path: str,
+) -> ActionResult:
+    if not context.desktop_enabled:
+        return ActionResult(False, "Desktop-команды отключены в конфигурации.")
+    project_root = context.metadata.get("project_root")
+    if not isinstance(project_root, Path):
+        return ActionResult(False, "Корень проекта не настроен.")
+    target = (project_root / path).resolve()
+    try:
+        target.relative_to(project_root.resolve())
+    except ValueError:
+        return ActionResult(False, "Путь выходит за пределы проекта.")
+    if not target.exists():
+        return ActionResult(False, "Файл проекта не найден.")
+    import os
+
+    os.startfile(str(target))
+    return ActionResult(True, f"Открываю {target.name}.")

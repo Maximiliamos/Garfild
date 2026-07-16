@@ -7,6 +7,7 @@ from garfield_intents import RiskLevel
 from .desktop import (
     close_window,
     open_application,
+    open_project_file,
     open_web,
     search_web,
     type_text,
@@ -79,6 +80,23 @@ def create_default_registry(context: ActionContext) -> ActionRegistry:
             partial(open_application, context),
             RiskLevel.VISIBLE,
             frozenset({"app_id"}),
+        ),
+        ActionDefinition(
+            "project_file.open",
+            "Открытие файла проекта",
+            partial(open_project_file, context),
+            RiskLevel.VISIBLE,
+            frozenset({"path"}),
+        ),
+        ActionDefinition(
+            "assistant.say",
+            "Локальный ответ",
+            lambda **arguments: ActionResult(
+                True,
+                str(arguments.get("text", "")),
+            ),
+            RiskLevel.SAFE,
+            frozenset({"text"}),
         ),
         ActionDefinition(
             "recycle_bin.empty",

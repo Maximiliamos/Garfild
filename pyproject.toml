@@ -36,7 +36,9 @@ py-modules = [
     "garfield_flagship",
     "garfield_flagship_legacy_tk",
     "garfield_intents",
+    "garfield_io",
     "garfield_privacy",
+    "garfield_skills",
 ]
 
 [tool.setuptools.packages.find]

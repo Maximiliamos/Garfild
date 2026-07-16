@@ -1,4 +1,5 @@
 {
+  "version": 2,
   "skills": [
     {
       "id": "google_search",
@@ -7,7 +8,10 @@
         "поищи в гугле {query}",
         "найди в интернете {query}"
       ],
-      "action": "search_web",
+      "action_id": "web.search",
+      "arguments": {
+        "query": "{query}"
+      },
       "response": "Ищу в интернете: {query}."
     },
     {
@@ -17,8 +21,10 @@
         "найди на ютубе {query}",
         "youtube {query}"
       ],
-      "action": "open_url",
-      "target": "https://www.youtube.com/results?search_query={query_url}",
+      "action_id": "web.open",
+      "arguments": {
+        "url": "https://www.youtube.com/results?search_query={query_url}"
+      },
       "response": "Ищу на YouTube: {query}."
     },
     {
@@ -28,8 +34,10 @@
         "открой build nvidia",
         "открой студию nvidia"
       ],
-      "action": "open_url",
-      "target": "https://build.nvidia.com",
+      "action_id": "web.open",
+      "arguments": {
+        "url": "https://build.nvidia.com"
+      },
       "response": "Открываю NVIDIA Build."
     },
     {
@@ -38,8 +46,10 @@
         "открой папку гарфилда",
         "открой рабочую папку гарфилда"
       ],
-      "action": "open_path",
-      "target": ".",
+      "action_id": "project_file.open",
+      "arguments": {
+        "path": "."
+      },
       "response": "Открываю папку проекта."
     },
     {
@@ -48,8 +58,10 @@
         "открой лог гарфилда",
         "покажи лог гарфилда"
       ],
-      "action": "open_path",
-      "target": "garfield_flagship.log",
+      "action_id": "project_file.open",
+      "arguments": {
+        "path": "garfield_flagship.log"
+      },
       "response": "Открываю лог приложения."
     },
     {
@@ -58,22 +70,11 @@
         "открой калькулятор",
         "запусти калькулятор"
       ],
-      "action": "run",
-      "target": "calc.exe",
+      "action_id": "application.open",
+      "arguments": {
+        "app_id": "calculator"
+      },
       "response": "Открываю калькулятор."
-    },
-    {
-      "id": "lock_screen",
-      "phrases": [
-        "заблокируй экран",
-        "блокировка экрана"
-      ],
-      "action": "hotkey",
-      "arguments": [
-        "win",
-        "l"
-      ],
-      "response": "Блокирую экран."
     }
   ]
 }

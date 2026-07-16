@@ -37,6 +37,7 @@ from garfield_intents import (
     requires_confirmation,
 )
 from garfield_privacy import looks_sensitive, redact_sensitive_text
+from garfield_skills import SkillRegistry as SafeSkillRegistry
 
 try:
     import pyautogui
@@ -412,30 +413,8 @@ class SkillRegistry:
             os.startfile(str(path))
             return response or f"Открываю {path.name}."
 
-        if skill.action == "run":
-            if skill.use_shell:
-                subprocess.Popen(target, shell=True)
-            else:
-                command = [target, *arguments] if target else arguments
-                if not command:
-                    raise ValueError("Для run-навыка не задан target.")
-                subprocess.Popen(command)
-            return response or "Команда запущена."
-
-        if skill.action == "python":
-            script_path = self._resolve_path(target)
-            if not script_path.exists():
-                raise FileNotFoundError(f"Python-скрипт не найден: {script_path}")
-            subprocess.Popen([sys.executable, str(script_path), *arguments])
-            return response or f"Запускаю Python-навык {script_path.name}."
-
-        if skill.action == "hotkey":
-            if pyautogui is None:
-                raise RuntimeError("Для hotkey-навыков нужен pyautogui.")
-            if not arguments:
-                raise ValueError("Для hotkey-навыка не заданы клавиши.")
-            pyautogui.hotkey(*arguments)
-            return response or "Горячая клавиша отправлена."
+        if skill.action in {"run", "python", "hotkey"}:
+            raise ValueError("Небезопасный тип навыка запрещён.")
 
         raise ValueError(f"Неизвестный тип навыка: {skill.action}")
 
@@ -1822,7 +1801,10 @@ class AssistantCore:
             platform_name=platform.system(),
             desktop_enabled=config.enable_desktop_commands,
             power_enabled=config.allow_power_commands,
-            metadata={"clipboard_writer": self.desktop._set_clipboard_text},
+            metadata={
+                "clipboard_writer": self.desktop._set_clipboard_text,
+                "project_root": BASE_DIR,
+            },
         )
         self.actions = create_default_registry(self.action_context)
         self.llm_client = create_llm_client(config)
@@ -1831,7 +1813,11 @@ class AssistantCore:
         self.last_user_command = ""
         self.previous_user_command = ""
         self.answer_cache: OrderedDict[str, str] = OrderedDict()
-        self.skills = SkillRegistry(Path(config.skills_path))
+        self.skills = SafeSkillRegistry(
+            Path(config.skills_path),
+            self.actions,
+            project_root=BASE_DIR,
+        )
         self.intent_router = IntentRouter()
 
     def handle(self, raw_text: str) -> Optional[AssistantReply]:

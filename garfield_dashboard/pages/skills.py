@@ -11,7 +11,13 @@ from ..components import ConfirmDialog, StatusPill, action_button, card, labeled
 from ..services import SkillRecord
 from ..theme import COLORS, FONTS
 
-SKILL_ACTIONS = ["say", "open_url", "search_web", "open_path", "run", "python", "hotkey"]
+SKILL_ACTIONS = [
+    "assistant.say",
+    "web.open",
+    "web.search",
+    "application.open",
+    "project_file.open",
+]
 
 
 class SkillDialog(ctk.CTkToplevel):
@@ -27,11 +33,9 @@ class SkillDialog(ctk.CTkToplevel):
 
         record = record or SkillRecord()
         self.id_var = tk.StringVar(value=record.skill_id)
-        self.action_var = tk.StringVar(value=record.action or "say")
+        self.action_var = tk.StringVar(value=record.action_id or "assistant.say")
         self.target_var = tk.StringVar(value=record.target)
         self.response_var = tk.StringVar(value=record.response)
-        self.arguments_var = tk.StringVar(value=", ".join(record.arguments))
-        self.use_shell_var = tk.BooleanVar(value=record.use_shell)
 
         self.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(self, text=title, anchor="w", text_color=COLORS["text"], font=FONTS["title"]).grid(
@@ -87,24 +91,8 @@ class SkillDialog(ctk.CTkToplevel):
         self.phrases_text.grid(row=2, column=1, sticky="ew", padx=(0, 14), pady=8)
         self.phrases_text.insert("1.0", "\n".join(record.phrases))
 
-        labeled_input(form, "Цель / target", 3, self.target_var)
+        labeled_input(form, "URL / query / app_id / путь", 3, self.target_var)
         labeled_input(form, "Ответ", 4, self.response_var)
-        labeled_input(form, "Аргументы", 5, self.arguments_var)
-
-        ctk.CTkLabel(form, text="use_shell", anchor="w", font=FONTS["body_bold"], text_color=COLORS["text"]).grid(
-            row=6,
-            column=0,
-            sticky="w",
-            padx=(14, 16),
-            pady=8,
-        )
-        ctk.CTkSwitch(form, text="", variable=self.use_shell_var, progress_color=COLORS["accent"]).grid(
-            row=6,
-            column=1,
-            sticky="w",
-            padx=(0, 14),
-            pady=8,
-        )
 
         self.error_label = ctk.CTkLabel(self, text="", anchor="w", text_color=COLORS["danger"], font=FONTS["small"])
         self.error_label.grid(row=2, column=0, sticky="ew", padx=22, pady=(0, 8))
@@ -132,11 +120,9 @@ class SkillDialog(ctk.CTkToplevel):
         record = SkillRecord(
             skill_id=skill_id,
             phrases=phrases,
-            action=action,
+            action_id=action,
             target=self.target_var.get().strip(),
             response=self.response_var.get().strip(),
-            arguments=[item.strip() for item in self.arguments_var.get().split(",") if item.strip()],
-            use_shell=bool(self.use_shell_var.get()),
         )
         self.destroy()
         self.on_save(record)
@@ -239,7 +225,7 @@ class SkillsPage(ctk.CTkFrame):
         values = [
             record.skill_id,
             "; ".join(record.phrases),
-            record.action,
+            record.action_id,
             record.target,
             record.response,
         ]

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import garfield_best as core
+from garfield_io import atomic_write_text
 
 
 @dataclass
@@ -32,38 +33,45 @@ class DiagnosticItem:
 class SkillRecord:
     skill_id: str = ""
     phrases: list[str] = field(default_factory=list)
-    action: str = "say"
+    action_id: str = "assistant.say"
     target: str = ""
     response: str = ""
-    arguments: list[str] = field(default_factory=list)
-    use_shell: bool = False
 
     @classmethod
     def from_skill(cls, skill: Any) -> "SkillRecord":
+        action_id = getattr(skill, "action_id", "assistant.say")
+        arguments = dict(getattr(skill, "arguments", {}))
+        target_key = {
+            "web.open": "url",
+            "web.search": "query",
+            "application.open": "app_id",
+            "project_file.open": "path",
+        }.get(action_id, "")
         return cls(
             skill_id=getattr(skill, "skill_id", ""),
             phrases=list(getattr(skill, "phrases", [])),
-            action=getattr(skill, "action", "say"),
-            target=getattr(skill, "target", ""),
+            action_id=action_id,
+            target=str(arguments.get(target_key, "")),
             response=getattr(skill, "response", ""),
-            arguments=list(getattr(skill, "arguments", [])),
-            use_shell=bool(getattr(skill, "use_shell", False)),
         )
 
     def to_json(self) -> dict[str, Any]:
+        argument_key = {
+            "web.open": "url",
+            "web.search": "query",
+            "application.open": "app_id",
+            "project_file.open": "path",
+        }.get(self.action_id)
         payload: dict[str, Any] = {
             "id": self.skill_id.strip(),
             "phrases": [item.strip() for item in self.phrases if item.strip()],
-            "action": self.action.strip(),
+            "action_id": self.action_id.strip(),
+            "arguments": (
+                {argument_key: self.target.strip()} if argument_key else {}
+            ),
         }
-        if self.target.strip():
-            payload["target"] = self.target.strip()
         if self.response.strip():
             payload["response"] = self.response.strip()
-        if self.arguments:
-            payload["arguments"] = [item.strip() for item in self.arguments if item.strip()]
-        if self.use_shell:
-            payload["use_shell"] = True
         return payload
 
 
@@ -278,8 +286,14 @@ class RuntimeAdapter:
     def save_skill_records(self, records: list[SkillRecord]) -> str:
         path = Path(self.config.skills_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"skills": [record.to_json() for record in records]}
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        payload = {
+            "version": 2,
+            "skills": [record.to_json() for record in records],
+        }
+        atomic_write_text(
+            path,
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        )
         count, error = self.runtime.assistant.skills.reload()
         if error:
             raise RuntimeError(error)

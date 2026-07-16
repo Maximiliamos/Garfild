@@ -23,6 +23,7 @@ except ImportError:
     ttk = None
 
 import garfield_best as core
+from garfield_io import atomic_write_text
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -234,9 +235,9 @@ def setup_logging() -> None:
 
 
 def save_config(config: FlagshipConfig, path: Path = CONFIG_PATH) -> None:
-    path.write_text(
+    atomic_write_text(
+        path,
         json.dumps(asdict(config), ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
     )
 
 
