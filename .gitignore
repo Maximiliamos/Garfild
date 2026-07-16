@@ -1,0 +1,13 @@
+garfield_flagship_config.json
+.env
+*.log
+garfield_session_history.txt
+test_kiro_key.py
+Новый текстовый документ.txt
+__pycache__/
+*.pyc
+.venv/
+venv/
+models/
+voice_samples/
+llm_audit_results.json

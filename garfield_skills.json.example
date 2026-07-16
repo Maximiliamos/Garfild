@@ -1,0 +1,30 @@
+{
+  "skills": [
+    {
+      "id": "example_search",
+      "phrases": [
+        "гугл {query}"
+      ],
+      "action": "search_web",
+      "response": "Ищу: {query}."
+    },
+    {
+      "id": "example_url",
+      "phrases": [
+        "открой мой сайт"
+      ],
+      "action": "open_url",
+      "target": "https://example.com",
+      "response": "Открываю сайт."
+    },
+    {
+      "id": "example_app",
+      "phrases": [
+        "открой калькулятор"
+      ],
+      "action": "run",
+      "target": "calc.exe",
+      "response": "Открываю калькулятор."
+    }
+  ]
+}

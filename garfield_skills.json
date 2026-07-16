@@ -1,0 +1,79 @@
+{
+  "skills": [
+    {
+      "id": "google_search",
+      "phrases": [
+        "гугл {query}",
+        "поищи в гугле {query}",
+        "найди в интернете {query}"
+      ],
+      "action": "search_web",
+      "response": "Ищу в интернете: {query}."
+    },
+    {
+      "id": "youtube_search",
+      "phrases": [
+        "ютуб {query}",
+        "найди на ютубе {query}",
+        "youtube {query}"
+      ],
+      "action": "open_url",
+      "target": "https://www.youtube.com/results?search_query={query_url}",
+      "response": "Ищу на YouTube: {query}."
+    },
+    {
+      "id": "open_nvidia_build",
+      "phrases": [
+        "открой nvidia build",
+        "открой build nvidia",
+        "открой студию nvidia"
+      ],
+      "action": "open_url",
+      "target": "https://build.nvidia.com",
+      "response": "Открываю NVIDIA Build."
+    },
+    {
+      "id": "open_project_folder",
+      "phrases": [
+        "открой папку гарфилда",
+        "открой рабочую папку гарфилда"
+      ],
+      "action": "open_path",
+      "target": ".",
+      "response": "Открываю папку проекта."
+    },
+    {
+      "id": "open_logs",
+      "phrases": [
+        "открой лог гарфилда",
+        "покажи лог гарфилда"
+      ],
+      "action": "open_path",
+      "target": "garfield_flagship.log",
+      "response": "Открываю лог приложения."
+    },
+    {
+      "id": "open_calculator",
+      "phrases": [
+        "открой калькулятор",
+        "запусти калькулятор"
+      ],
+      "action": "run",
+      "target": "calc.exe",
+      "response": "Открываю калькулятор."
+    },
+    {
+      "id": "lock_screen",
+      "phrases": [
+        "заблокируй экран",
+        "блокировка экрана"
+      ],
+      "action": "hotkey",
+      "arguments": [
+        "win",
+        "l"
+      ],
+      "response": "Блокирую экран."
+    }
+  ]
+}

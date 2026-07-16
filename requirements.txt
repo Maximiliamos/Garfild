@@ -1,0 +1,10 @@
+requests>=2.32
+customtkinter>=5.2.2
+sounddevice>=0.4.7
+vosk>=0.3.45
+pyttsx3>=2.98
+pyautogui>=0.9.54
+numpy>=1.26
+edge-tts>=7.2.8
+piper-tts>=1.4.1
+pathvalidate>=3.3.1
