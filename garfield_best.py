@@ -24,7 +24,17 @@ from urllib.parse import quote_plus
 
 import requests
 
-from garfield_intents import Intent, IntentRouter
+from garfield_intents import (
+    ActionRequest,
+    Intent,
+    IntentRouter,
+    PendingAction,
+    RiskLevel,
+    confirmation_token,
+    is_cancellation,
+    is_confirmation,
+    requires_confirmation,
+)
 from garfield_privacy import looks_sensitive, redact_sensitive_text
 
 try:
@@ -246,15 +256,6 @@ class AssistantReply:
     history_policy: HistoryPolicy = HistoryPolicy.EXCLUDE
     sensitive: bool = False
     action_id: str | None = None
-
-
-@dataclass
-class PendingPowerAction:
-    kind: str
-    created_at: float
-
-    def is_expired(self, timeout_sec: int = 20) -> bool:
-        return time.time() - self.created_at > timeout_sec
 
 
 @dataclass
@@ -1817,7 +1818,7 @@ class AssistantCore:
         self.history = ConversationHistory(config.remember_turns)
         self.desktop = DesktopController(config.allow_power_commands)
         self.llm_client = create_llm_client(config)
-        self.pending_power_action: Optional[PendingPowerAction] = None
+        self.pending_action: PendingAction | None = None
         self.last_answer = ""
         self.last_user_command = ""
         self.previous_user_command = ""
@@ -1845,8 +1846,8 @@ class AssistantCore:
         return reply
 
     def _dispatch(self, text: str) -> AssistantReply | None:
-        if self.pending_power_action:
-            reply = self._handle_pending_power_action(text)
+        if self.pending_action:
+            reply = self._handle_pending_action(text)
             if reply:
                 return reply
 
@@ -1875,11 +1876,35 @@ class AssistantCore:
         )
 
     def _handle_intent(self, intent: Intent) -> AssistantReply:
-        if intent.intent_id == "window.close":
-            disabled = self._desktop_unavailable()
-            if disabled:
-                return disabled
-            return AssistantReply(self.desktop.close_window())
+        display_names = {
+            "window.close": "закрытие окна",
+            "recycle_bin.empty": "очистка корзины",
+            "system.shutdown": "выключение компьютера",
+            "system.restart": "перезагрузка компьютера",
+            "system.sleep": "переход компьютера в спящий режим",
+        }
+        if intent.risk >= RiskLevel.DESTRUCTIVE:
+            request = ActionRequest(
+                action_id=intent.intent_id,
+                arguments=dict(intent.arguments),
+                risk=intent.risk,
+                display_name=display_names.get(intent.intent_id, intent.intent_id),
+            )
+            if intent.risk is RiskLevel.SYSTEM and not self.config.allow_power_commands:
+                return AssistantReply(
+                    "Силовые команды сейчас отключены в конфиге ради безопасности."
+                )
+            if requires_confirmation(request):
+                token = confirmation_token(request.action_id)
+                self.pending_action = PendingAction(
+                    request=request,
+                    created_at=time.monotonic(),
+                    confirmation_token=token,
+                )
+                return AssistantReply(
+                    f"Подтвердите действие: {token}.",
+                    action_id=intent.intent_id,
+                )
 
         if intent.intent_id == "text.type":
             disabled = self._desktop_unavailable()
@@ -1894,23 +1919,6 @@ class AssistantCore:
         if intent.intent_id == "web.search":
             return AssistantReply(
                 self.desktop.search_web(intent.arguments["query"]),
-                action_id=intent.intent_id,
-            )
-
-        power_kinds = {
-            "system.shutdown": "shutdown",
-            "system.restart": "restart",
-            "system.sleep": "sleep",
-        }
-        if intent.intent_id in power_kinds:
-            if not self.config.allow_power_commands:
-                return AssistantReply(
-                    "Силовые команды сейчас отключены в конфиге ради безопасности."
-                )
-            kind = power_kinds[intent.intent_id]
-            self.pending_power_action = PendingPowerAction(kind, time.time())
-            return AssistantReply(
-                self._power_confirmation_text(self._power_action_label(kind)),
                 action_id=intent.intent_id,
             )
 
@@ -1945,29 +1953,50 @@ class AssistantCore:
     def _is_addressed_to_assistant(self, text: str) -> bool:
         return self.config.assistant_name.lower() in text
 
-    def _handle_pending_power_action(self, text: str) -> Optional[AssistantReply]:
-        if self.pending_power_action is None:
+    def _handle_pending_action(self, text: str) -> AssistantReply | None:
+        if self.pending_action is None:
             return None
 
         timeout_sec = getattr(self.config, "command_confirmation_timeout_sec", 20)
-        if self.pending_power_action.is_expired(timeout_sec):
-            self.pending_power_action = None
+        pending = self.pending_action
+        if pending.is_expired(timeout_sec):
+            self.pending_action = None
             return AssistantReply("Время подтверждения истекло. Команда отменена.")
 
         cancel_phrases = getattr(self.config, "cancel_phrases", ["нет", "отмена", "отмени", "не надо"])
-        if any(text == phrase or text.startswith(f"{phrase} ") for phrase in cancel_phrases):
-            self.pending_power_action = None
+        if is_cancellation(text, cancel_phrases):
+            self.pending_action = None
             return AssistantReply("Команда отменена.")
 
         confirm_phrases = getattr(self.config, "confirm_phrases", ["да", "подтверждаю"])
-        if any(text == phrase or text.startswith(f"{phrase} ") for phrase in confirm_phrases):
-            kind = self.pending_power_action.kind
-            self.pending_power_action = None
-            return AssistantReply(self.desktop.perform_power_action(kind))
+        if is_confirmation(text, pending, confirm_phrases):
+            self.pending_action = None
+            return self._execute_pending_action(pending.request)
 
         return AssistantReply(
-            f"Для подтверждения скажите {confirm_phrases[0]} или скажите {cancel_phrases[0]}."
+            (
+                f"Для подтверждения скажите «{confirm_phrases[-1]} "
+                f"{pending.confirmation_token}» или «{cancel_phrases[0]}»."
+            )
         )
+
+    def _execute_pending_action(self, request: ActionRequest) -> AssistantReply:
+        if request.action_id == "window.close":
+            disabled = self._desktop_unavailable()
+            return disabled or AssistantReply(self.desktop.close_window())
+        if request.action_id == "recycle_bin.empty":
+            disabled = self._desktop_unavailable()
+            return disabled or AssistantReply(self.desktop.empty_recycle_bin())
+
+        power_kinds = {
+            "system.shutdown": "shutdown",
+            "system.restart": "restart",
+            "system.sleep": "sleep",
+        }
+        kind = power_kinds.get(request.action_id)
+        if kind:
+            return AssistantReply(self.desktop.perform_power_action(kind))
+        return AssistantReply("Неизвестное подтверждённое действие.", should_speak=False)
 
     def _power_action_label(self, kind: str) -> str:
         return {
@@ -2288,25 +2317,22 @@ class AssistantCore:
         if contains_any(text, ("выключи компьютер", "выключение компьютера")):
             if not self.config.allow_power_commands:
                 return AssistantReply("Силовые команды сейчас отключены в конфиге ради безопасности.")
-            self.pending_power_action = PendingPowerAction("shutdown", time.time())
-            return AssistantReply(
-                self._power_confirmation_text("выключение")
+            return self._handle_intent(
+                Intent("system.shutdown", risk=RiskLevel.SYSTEM, original_text=text)
             )
 
         if contains_any(text, ("перезагрузи компьютер", "перезагрузка компьютера")):
             if not self.config.allow_power_commands:
                 return AssistantReply("Силовые команды сейчас отключены в конфиге ради безопасности.")
-            self.pending_power_action = PendingPowerAction("restart", time.time())
-            return AssistantReply(
-                self._power_confirmation_text("перезагрузку")
+            return self._handle_intent(
+                Intent("system.restart", risk=RiskLevel.SYSTEM, original_text=text)
             )
 
         if contains_any(text, ("спящий режим", "переведи в сон", "усыпи компьютер", "сон компьютера")):
             if not self.config.allow_power_commands:
                 return AssistantReply("Силовые команды сейчас отключены в конфиге ради безопасности.")
-            self.pending_power_action = PendingPowerAction("sleep", time.time())
-            return AssistantReply(
-                self._power_confirmation_text("спящий режим")
+            return self._handle_intent(
+                Intent("system.sleep", risk=RiskLevel.SYSTEM, original_text=text)
             )
 
         if contains_any(text, ("обнови навыки", "перезагрузи навыки", "reload skills")):

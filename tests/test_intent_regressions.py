@@ -25,7 +25,7 @@ def test_power_command_stays_disabled_by_default(tmp_path: Path) -> None:
     reply = assistant.handle("выключи компьютер")
 
     assert reply is not None
-    assert assistant.pending_power_action is None
+    assert assistant.pending_action is None
     assert assistant.history.turns == []
 
 
@@ -47,6 +47,46 @@ def test_negated_close_window_does_not_execute_desktop_action(monkeypatch, tmp_p
     assistant.handle("не закрывай окно")
 
     assert called is False
+
+
+def test_destructive_action_requires_full_confirmation(monkeypatch, tmp_path: Path) -> None:
+    config = FakeConfig(
+        skills_path=str(tmp_path / "skills.json"),
+        enable_desktop_commands=True,
+    )
+    assistant = AssistantCore(config)
+    calls = 0
+
+    def close_window() -> str:
+        nonlocal calls
+        calls += 1
+        return "Закрываю окно."
+
+    monkeypatch.setattr(assistant.desktop, "close_window", close_window)
+
+    prompt = assistant.handle("закрой окно")
+    plain_yes = assistant.handle("да")
+    confirmed = assistant.handle("подтверждаю закрытие окна")
+
+    assert prompt is not None and "Подтвердите" in prompt.text
+    assert plain_yes is not None and "Для подтверждения" in plain_yes.text
+    assert confirmed is not None and confirmed.text == "Закрываю окно."
+    assert calls == 1
+    assert assistant.pending_action is None
+
+
+def test_cancellation_clears_pending_action(tmp_path: Path) -> None:
+    config = FakeConfig(
+        skills_path=str(tmp_path / "skills.json"),
+        enable_desktop_commands=True,
+    )
+    assistant = AssistantCore(config)
+
+    assistant.handle("закрой окно")
+    reply = assistant.handle("нет")
+
+    assert reply is not None and reply.text == "Команда отменена."
+    assert assistant.pending_action is None
 
 
 def test_local_command_is_not_added_to_llm_history(tmp_path: Path) -> None:

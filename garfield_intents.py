@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import secrets
+import time
 from dataclasses import dataclass, field
 from enum import IntEnum
 from re import Pattern
@@ -29,6 +31,26 @@ class IntentPattern:
     pattern: Pattern[str]
     risk: RiskLevel = RiskLevel.SAFE
     allow_negation: bool = False
+
+
+@dataclass(frozen=True)
+class ActionRequest:
+    action_id: str
+    arguments: dict[str, object]
+    risk: RiskLevel
+    display_name: str
+    sensitive_arguments: frozenset[str] = frozenset()
+
+
+@dataclass
+class PendingAction:
+    request: ActionRequest
+    created_at: float
+    confirmation_token: str
+    nonce: str = field(default_factory=lambda: secrets.token_hex(4))
+
+    def is_expired(self, timeout_sec: int) -> bool:
+        return time.monotonic() - self.created_at > timeout_sec
 
 
 PUNCTUATION_RE = re.compile(r"[^\w\s%-]", re.UNICODE)
@@ -89,6 +111,11 @@ INTENT_PATTERNS = [
         risk=RiskLevel.SYSTEM,
     ),
     IntentPattern(
+        intent_id="recycle_bin.empty",
+        pattern=re.compile(r"^(?:очисти|очистить)\s+корзину$"),
+        risk=RiskLevel.DESTRUCTIVE,
+    ),
+    IntentPattern(
         intent_id="text.type",
         pattern=re.compile(r"^(?:напечатай|введи(?:\s+текст)?|набери(?:\s+текст)?)\s+(?P<text>.+)$"),
         risk=RiskLevel.SENSITIVE,
@@ -99,6 +126,41 @@ INTENT_PATTERNS = [
         risk=RiskLevel.VISIBLE,
     ),
 ]
+
+
+CONFIRMATION_TOKENS = {
+    "window.close": "закрытие окна",
+    "recycle_bin.empty": "очистку корзины",
+    "system.shutdown": "выключение компьютера",
+    "system.restart": "перезагрузку компьютера",
+    "system.sleep": "переход компьютера в спящий режим",
+}
+
+
+def requires_confirmation(request: ActionRequest) -> bool:
+    return request.risk >= RiskLevel.DESTRUCTIVE
+
+
+def confirmation_token(action_id: str) -> str:
+    return CONFIRMATION_TOKENS.get(action_id, action_id)
+
+
+def is_confirmation(
+    text: str,
+    pending: PendingAction,
+    confirm_phrases: list[str],
+) -> bool:
+    normalized = normalize_command_text(text)
+    normalized_phrases = {normalize_command_text(phrase) for phrase in confirm_phrases}
+    if pending.request.risk >= RiskLevel.DESTRUCTIVE:
+        full_phrases = {f"{phrase} {pending.confirmation_token}" for phrase in normalized_phrases}
+        return normalized in full_phrases
+    return normalized in normalized_phrases
+
+
+def is_cancellation(text: str, cancel_phrases: list[str]) -> bool:
+    normalized = normalize_command_text(text)
+    return normalized in {normalize_command_text(phrase) for phrase in cancel_phrases}
 
 
 class IntentRouter:
