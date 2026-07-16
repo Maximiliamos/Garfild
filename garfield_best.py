@@ -22,11 +22,12 @@ from enum import Enum
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 import requests
 
 from garfield_actions import ActionContext, create_default_registry
+from garfield_config import clamp_int, load_json_config, resolve_config_path
 from garfield_intents import (
     ActionRequest,
     Intent,
@@ -108,6 +109,7 @@ class AppConfig:
     llm_api_url: str = "https://integrate.api.nvidia.com/v1/chat/completions"
     llm_model: str = "meta/llama-3.1-8b-instruct"
     use_llm: bool = True
+    allow_custom_llm_endpoint: bool = False
     nvidia_api_key_env: str = "NVIDIA_API_KEY"
     openai_api_key_env: str = "OPENAI_API_KEY"
     gemini_api_key_env: str = "GEMINI_API_KEY"
@@ -148,10 +150,8 @@ class AppConfig:
         path: Path,
         secret_store: SecretStore | None = None,
     ) -> "AppConfig":
-        raw_data = {}
-        if path.exists():
-            with path.open("r", encoding="utf-8") as file:
-                raw_data = json.load(file)
+        raw_data, load_warnings = load_json_config(path)
+        if raw_data:
             if migrate_plaintext_secrets(
                 raw_data,
                 secret_store or SecretStore(),
@@ -170,6 +170,7 @@ class AppConfig:
         valid_fields = {field.name for field in fields(cls)}
         filtered_data = {key: value for key, value in data.items() if key in valid_fields}
         config = cls(**{**asdict(cls()), **filtered_data})
+        config.load_warnings = load_warnings
 
         env_model_path = os.getenv("GARFIELD_VOSK_MODEL_PATH", "").strip()
         env_llm_provider = os.getenv("GARFIELD_LLM_PROVIDER", "").strip()
@@ -209,30 +210,46 @@ class AppConfig:
         if env_skills_path:
             config.skills_path = env_skills_path
 
-        if not config.vosk_model_path:
-            config.vosk_model_path = str(resolve_default_vosk_path())
-        if not config.piper_model_path:
-            config.piper_model_path = str(resolve_default_piper_model_path())
-        if not config.piper_config_path:
-            config.piper_config_path = str(resolve_default_piper_config_path())
-        if not config.skills_path:
-            config.skills_path = str(SKILLS_PATH)
-
-        config.piper_model_path = _prefer_existing_local_path(
-            config.piper_model_path,
-            resolve_default_piper_model_path(),
+        config_base_dir = path.resolve().parent
+        config.vosk_model_path = str(
+            resolve_config_path(
+                config_base_dir,
+                config.vosk_model_path or "models/vosk-model-ru-0.22",
+            )
         )
-        config.piper_config_path = _prefer_existing_local_path(
-            config.piper_config_path,
-            resolve_default_piper_config_path(),
+        config.piper_model_path = str(
+            resolve_config_path(
+                config_base_dir,
+                config.piper_model_path
+                or "models/piper/ru_RU-irina-medium.onnx",
+            )
         )
-        config.skills_path = _prefer_existing_local_path(config.skills_path, SKILLS_PATH)
+        config.piper_config_path = str(
+            resolve_config_path(
+                config_base_dir,
+                config.piper_config_path
+                or "models/piper/ru_RU-irina-medium.onnx.json",
+            )
+        )
+        config.skills_path = str(
+            resolve_config_path(
+                config_base_dir,
+                config.skills_path or "garfield_skills.json",
+            )
+        )
 
         config.input_mode = config.input_mode.lower().strip()
         config.llm_provider = normalize_llm_provider(config.llm_provider)
         if not config.llm_model:
             config.llm_model = default_llm_model(config.llm_provider)
-        config.llm_api_url = default_llm_api_url(config.llm_provider, config.llm_api_url)
+        config.llm_api_url = validate_llm_api_url(
+            config.llm_provider,
+            default_llm_api_url(
+                config.llm_provider,
+                config.llm_api_url,
+            ),
+            allow_custom=config.allow_custom_llm_endpoint,
+        )
         config.activation_mode = config.activation_mode.lower().strip()
         if config.activation_mode not in {"continuous", "wake_word"}:
             config.activation_mode = "continuous"
@@ -241,7 +258,18 @@ class AppConfig:
         config.wake_words = [normalize_text(word) for word in config.wake_words if normalize_text(word)]
         if not config.wake_words:
             config.wake_words = ["гарфилд"]
-        config.wake_window_sec = max(3, min(int(config.wake_window_sec or 12), 60))
+        config.recognition_timeout_sec = clamp_int(
+            config.recognition_timeout_sec,
+            1,
+            300,
+            "recognition_timeout_sec",
+        )
+        config.wake_window_sec = clamp_int(
+            config.wake_window_sec,
+            3,
+            60,
+            "wake_window_sec",
+        )
         config.voice_activation_threshold = max(0.0, min(float(config.voice_activation_threshold or 0.0), 0.1))
         config.recognition_confidence_threshold = max(
             0.0,
@@ -251,7 +279,30 @@ class AppConfig:
             0.0,
             min(float(config.wake_word_confidence_threshold or 0.0), 1.0),
         )
-        config.command_confirmation_timeout_sec = max(5, min(int(config.command_confirmation_timeout_sec or 20), 120))
+        config.command_confirmation_timeout_sec = clamp_int(
+            config.command_confirmation_timeout_sec,
+            5,
+            120,
+            "command_confirmation_timeout_sec",
+        )
+        config.remember_turns = clamp_int(
+            config.remember_turns,
+            1,
+            100,
+            "remember_turns",
+        )
+        config.max_cached_answers = clamp_int(
+            config.max_cached_answers,
+            1,
+            10_000,
+            "max_cached_answers",
+        )
+        config.answer_cache_ttl_sec = clamp_int(
+            config.answer_cache_ttl_sec,
+            1,
+            86_400,
+            "answer_cache_ttl_sec",
+        )
         if isinstance(config.confirm_phrases, str):
             config.confirm_phrases = [part.strip() for part in config.confirm_phrases.split(",") if part.strip()]
         if isinstance(config.cancel_phrases, str):
@@ -1289,6 +1340,28 @@ def default_llm_api_url(provider: str, current_url: str = "") -> str:
 
     known_urls = {str(info["chat_url"]) for info in LLM_PROVIDERS.values()}
     return default_url if current_url in known_urls else current_url
+
+
+def validate_llm_api_url(
+    provider: str,
+    raw_url: str,
+    *,
+    allow_custom: bool,
+) -> str:
+    default_url = default_llm_api_url(provider, "")
+    expected = urlparse(default_url)
+    actual = urlparse(raw_url or default_url)
+    if actual.scheme != "https":
+        raise ValueError("LLM API должен использовать HTTPS.")
+    if not actual.hostname:
+        raise ValueError("LLM API URL не содержит hostname.")
+    if actual.username or actual.password:
+        raise ValueError("Логин и пароль внутри URL запрещены.")
+    if not allow_custom and actual.hostname != expected.hostname:
+        raise ValueError(
+            "Для выбранного провайдера разрешён только стандартный API endpoint."
+        )
+    return actual.geturl()
 
 
 def _config_api_key_env(config: object, provider: str) -> str:

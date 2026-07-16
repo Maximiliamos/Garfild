@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import garfield_best as core
+from garfield_config import clamp_int, resolve_config_path
 from garfield_io import atomic_write_text
 from garfield_privacy import redact_sensitive_text
 from garfield_secrets import PROVIDERS, SecretStore
@@ -396,24 +397,65 @@ class RuntimeAdapter:
         cfg.enable_desktop_commands = bool(values["enable_desktop_commands"])
         cfg.allow_power_commands = bool(values["allow_power_commands"])
         cfg.screen_hints_enabled = bool(values["screen_hints_enabled"])
-        cfg.command_confirmation_timeout_sec = max(5, min(int(values["command_confirmation_timeout_sec"]), 120))
+        cfg.command_confirmation_timeout_sec = clamp_int(
+            values["command_confirmation_timeout_sec"],
+            5,
+            120,
+            "Автоотмена команды",
+        )
         cfg.confirm_phrases = [core.normalize_text(item) for item in str(values["confirm_phrases"]).split(",") if core.normalize_text(item)]
         cfg.cancel_phrases = [core.normalize_text(item) for item in str(values["cancel_phrases"]).split(",") if core.normalize_text(item)]
         if not cfg.confirm_phrases:
             cfg.confirm_phrases = ["да", "подтверждаю"]
         if not cfg.cancel_phrases:
             cfg.cancel_phrases = ["нет", "отмена", "отмени", "не надо"]
-        cfg.vosk_model_path = values["vosk_model_path"].strip()
+        cfg.vosk_model_path = str(
+            resolve_config_path(
+                self.paths.base_dir,
+                values["vosk_model_path"].strip(),
+            )
+        )
         cfg.tts_voice = values["tts_voice"].strip() or "ru-RU-SvetlanaNeural"
-        cfg.piper_model_path = values["piper_model_path"].strip()
-        cfg.piper_config_path = values["piper_config_path"].strip()
+        cfg.piper_model_path = str(
+            resolve_config_path(
+                self.paths.base_dir,
+                values["piper_model_path"].strip(),
+            )
+        )
+        cfg.piper_config_path = str(
+            resolve_config_path(
+                self.paths.base_dir,
+                values["piper_config_path"].strip(),
+            )
+        )
         cfg.llm_provider = core.normalize_llm_provider(values["llm_provider"])
-        cfg.llm_api_url = values["llm_api_url"].strip()
-        cfg.llm_api_url = core.default_llm_api_url(cfg.llm_provider, cfg.llm_api_url)
+        cfg.allow_custom_llm_endpoint = bool(
+            values["allow_custom_llm_endpoint"]
+        )
+        cfg.llm_api_url = core.validate_llm_api_url(
+            cfg.llm_provider,
+            values["llm_api_url"].strip(),
+            allow_custom=cfg.allow_custom_llm_endpoint,
+        )
         cfg.llm_model = values["llm_model"].strip() or core.default_llm_model(cfg.llm_provider)
-        cfg.remember_turns = max(1, int(values["remember_turns"]))
-        cfg.max_cached_answers = max(1, int(values["max_cached_answers"]))
-        cfg.skills_path = values["skills_path"].strip()
+        cfg.remember_turns = clamp_int(
+            values["remember_turns"],
+            1,
+            100,
+            "Количество ходов памяти",
+        )
+        cfg.max_cached_answers = clamp_int(
+            values["max_cached_answers"],
+            1,
+            10_000,
+            "Максимум кэшированных ответов",
+        )
+        cfg.skills_path = str(
+            resolve_config_path(
+                self.paths.base_dir,
+                values["skills_path"].strip(),
+            )
+        )
 
         self.runtime.tts.enabled = cfg.tts_enabled
         self.runtime.tts.speaker.assistant_name = cfg.assistant_name

@@ -25,6 +25,7 @@ except ImportError:
     ttk = None
 
 import garfield_best as core
+from garfield_config import clamp_int, load_json_config, resolve_config_path
 from garfield_io import atomic_write_text
 from garfield_privacy import (
     SecretRedactingFilter,
@@ -61,6 +62,7 @@ class FlagshipConfig:
     llm_api_url: str = "https://integrate.api.nvidia.com/v1/chat/completions"
     llm_model: str = "meta/llama-3.1-8b-instruct"
     use_llm: bool = True
+    allow_custom_llm_endpoint: bool = False
     nvidia_api_key_env: str = "NVIDIA_API_KEY"
     openai_api_key_env: str = "OPENAI_API_KEY"
     gemini_api_key_env: str = "GEMINI_API_KEY"
@@ -104,10 +106,8 @@ class FlagshipConfig:
         path: Path,
         secret_store: SecretStore | None = None,
     ) -> "FlagshipConfig":
-        raw_data = {}
-        if path.exists():
-            with path.open("r", encoding="utf-8") as file:
-                raw_data = json.load(file)
+        raw_data, load_warnings = load_json_config(path)
+        if raw_data:
             if migrate_plaintext_secrets(
                 raw_data,
                 secret_store or SecretStore(),
@@ -124,6 +124,7 @@ class FlagshipConfig:
         valid_fields = {field.name for field in fields(cls)}
         filtered_data = {key: value for key, value in data.items() if key in valid_fields}
         config = cls(**{**asdict(cls()), **filtered_data})
+        config.load_warnings = load_warnings
         env_model_path = os.getenv("GARFIELD_VOSK_MODEL_PATH", "").strip()
         env_llm_provider = os.getenv("GARFIELD_LLM_PROVIDER", "").strip()
         env_llm_url = os.getenv("GARFIELD_LLM_API_URL", "").strip()
@@ -162,26 +163,32 @@ class FlagshipConfig:
         if env_skills_path:
             config.skills_path = env_skills_path
 
-        if not config.vosk_model_path:
-            config.vosk_model_path = str(core.resolve_default_vosk_path())
-        if not config.piper_model_path:
-            config.piper_model_path = str(core.resolve_default_piper_model_path())
-        if not config.piper_config_path:
-            config.piper_config_path = str(core.resolve_default_piper_config_path())
-        if not config.skills_path:
-            config.skills_path = str(core.SKILLS_PATH)
-
-        config.piper_model_path = _prefer_existing_local_path(
-            config.piper_model_path,
-            BASE_DIR / "models" / "piper" / "ru_RU-irina-medium.onnx",
+        config_base_dir = path.resolve().parent
+        config.vosk_model_path = str(
+            resolve_config_path(
+                config_base_dir,
+                config.vosk_model_path or "models/vosk-model-ru-0.22",
+            )
         )
-        config.piper_config_path = _prefer_existing_local_path(
-            config.piper_config_path,
-            BASE_DIR / "models" / "piper" / "ru_RU-irina-medium.onnx.json",
+        config.piper_model_path = str(
+            resolve_config_path(
+                config_base_dir,
+                config.piper_model_path
+                or "models/piper/ru_RU-irina-medium.onnx",
+            )
         )
-        config.skills_path = _prefer_existing_local_path(
-            config.skills_path,
-            BASE_DIR / "garfield_skills.json",
+        config.piper_config_path = str(
+            resolve_config_path(
+                config_base_dir,
+                config.piper_config_path
+                or "models/piper/ru_RU-irina-medium.onnx.json",
+            )
+        )
+        config.skills_path = str(
+            resolve_config_path(
+                config_base_dir,
+                config.skills_path or "garfield_skills.json",
+            )
         )
 
         config.input_mode = config.input_mode.lower().strip()
@@ -189,7 +196,14 @@ class FlagshipConfig:
         config.llm_provider = core.normalize_llm_provider(config.llm_provider)
         if not config.llm_model:
             config.llm_model = core.default_llm_model(config.llm_provider)
-        config.llm_api_url = core.default_llm_api_url(config.llm_provider, config.llm_api_url)
+        config.llm_api_url = core.validate_llm_api_url(
+            config.llm_provider,
+            core.default_llm_api_url(
+                config.llm_provider,
+                config.llm_api_url,
+            ),
+            allow_custom=config.allow_custom_llm_endpoint,
+        )
         config.activation_mode = config.activation_mode.lower().strip()
         if config.activation_mode not in {"continuous", "wake_word"}:
             config.activation_mode = "continuous"
@@ -198,7 +212,18 @@ class FlagshipConfig:
         config.wake_words = [core.normalize_text(word) for word in config.wake_words if core.normalize_text(word)]
         if not config.wake_words:
             config.wake_words = ["гарфилд"]
-        config.wake_window_sec = max(3, min(int(config.wake_window_sec or 12), 60))
+        config.recognition_timeout_sec = clamp_int(
+            config.recognition_timeout_sec,
+            1,
+            300,
+            "recognition_timeout_sec",
+        )
+        config.wake_window_sec = clamp_int(
+            config.wake_window_sec,
+            3,
+            60,
+            "wake_window_sec",
+        )
         config.voice_activation_threshold = max(0.0, min(float(config.voice_activation_threshold or 0.0), 0.1))
         config.recognition_confidence_threshold = max(
             0.0,
@@ -208,7 +233,48 @@ class FlagshipConfig:
             0.0,
             min(float(config.wake_word_confidence_threshold or 0.0), 1.0),
         )
-        config.command_confirmation_timeout_sec = max(5, min(int(config.command_confirmation_timeout_sec or 20), 120))
+        config.command_confirmation_timeout_sec = clamp_int(
+            config.command_confirmation_timeout_sec,
+            5,
+            120,
+            "command_confirmation_timeout_sec",
+        )
+        config.remember_turns = clamp_int(
+            config.remember_turns,
+            1,
+            100,
+            "remember_turns",
+        )
+        config.max_cached_answers = clamp_int(
+            config.max_cached_answers,
+            1,
+            10_000,
+            "max_cached_answers",
+        )
+        config.answer_cache_ttl_sec = clamp_int(
+            config.answer_cache_ttl_sec,
+            1,
+            86_400,
+            "answer_cache_ttl_sec",
+        )
+        config.history_retention_days = clamp_int(
+            config.history_retention_days,
+            0,
+            3_650,
+            "history_retention_days",
+        )
+        config.log_max_bytes = clamp_int(
+            config.log_max_bytes,
+            1_024,
+            100_000_000,
+            "log_max_bytes",
+        )
+        config.log_backup_count = clamp_int(
+            config.log_backup_count,
+            0,
+            100,
+            "log_backup_count",
+        )
         if isinstance(config.confirm_phrases, str):
             config.confirm_phrases = [part.strip() for part in config.confirm_phrases.split(",") if part.strip()]
         if isinstance(config.cancel_phrases, str):
@@ -409,6 +475,8 @@ class FlagshipRuntime:
 
         for line in self._build_diagnostics():
             self.emit("status", line)
+        for warning in getattr(self.config, "load_warnings", []):
+            self.emit("status", warning)
 
         startup = (
             f"{self.config.assistant_name} готов к работе. "

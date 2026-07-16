@@ -7,6 +7,7 @@ import tkinter as tk
 import customtkinter as ctk
 
 import garfield_best as core
+from garfield_config import clamp_int
 from garfield_secrets import PROVIDERS
 
 from ..components import ConfirmDialog, action_button, card, labeled_input
@@ -37,6 +38,7 @@ class SettingsPage(ctk.CTkFrame):
             "piper_config_path": tk.StringVar(),
             "llm_provider": tk.StringVar(),
             "llm_api_url": tk.StringVar(),
+            "allow_custom_llm_endpoint": tk.BooleanVar(),
             "llm_model": tk.StringVar(),
             "nvidia_api_key": tk.StringVar(),
             "openai_api_key": tk.StringVar(),
@@ -48,6 +50,7 @@ class SettingsPage(ctk.CTkFrame):
             "skills_path": tk.StringVar(),
         }
         self.model_menu: ctk.CTkOptionMenu | None = None
+        self.api_url_entry: ctk.CTkEntry | None = None
         self.secret_status_labels: dict[str, ctk.CTkLabel] = {}
 
         self.grid_columnconfigure(0, weight=1)
@@ -106,7 +109,33 @@ class SettingsPage(ctk.CTkFrame):
             command=self._on_provider_change,
         ); row += 1
         self.model_menu = self._option("Модель ответа", row, self.vars["llm_model"], core.llm_model_ids("nvidia")); row += 1
-        labeled_input(self.form, "API URL", row, self.vars["llm_api_url"]); row += 1
+        self.api_url_entry = labeled_input(
+            self.form,
+            "API URL",
+            row,
+            self.vars["llm_api_url"],
+        )
+        row += 1
+        self._switch(
+            "Разрешить пользовательский endpoint",
+            row,
+            self.vars["allow_custom_llm_endpoint"],
+            command=self._on_custom_endpoint_toggle,
+        )
+        row += 1
+        ctk.CTkLabel(
+            self.form,
+            text=(
+                "Внимание: при пользовательском endpoint API-ключ будет "
+                "отправлен на выбранный сервер."
+            ),
+            anchor="w",
+            justify="left",
+            wraplength=700,
+            text_color=COLORS["warning"],
+            font=FONTS["small"],
+        ).grid(row=row, column=1, sticky="ew", pady=(0, 8))
+        row += 1
         provider_labels = {
             "nvidia": "NVIDIA API key",
             "openai": "OpenAI API key",
@@ -165,7 +194,13 @@ class SettingsPage(ctk.CTkFrame):
         menu.grid(row=row, column=1, sticky="ew", pady=8)
         return menu
 
-    def _switch(self, label: str, row: int, variable) -> None:
+    def _switch(
+        self,
+        label: str,
+        row: int,
+        variable,
+        command=None,
+    ) -> None:
         ctk.CTkLabel(self.form, text=label, anchor="w", text_color=COLORS["text"], font=FONTS["body_bold"]).grid(
             row=row,
             column=0,
@@ -173,7 +208,13 @@ class SettingsPage(ctk.CTkFrame):
             padx=(0, 16),
             pady=8,
         )
-        ctk.CTkSwitch(self.form, text="", variable=variable, progress_color=COLORS["accent"]).grid(
+        ctk.CTkSwitch(
+            self.form,
+            text="",
+            variable=variable,
+            progress_color=COLORS["accent"],
+            command=command,
+        ).grid(
             row=row,
             column=1,
             sticky="w",
@@ -242,6 +283,7 @@ class SettingsPage(ctk.CTkFrame):
             "piper_config_path": cfg.piper_config_path,
             "llm_provider": core.normalize_llm_provider(getattr(cfg, "llm_provider", "nvidia")),
             "llm_api_url": cfg.llm_api_url,
+            "allow_custom_llm_endpoint": cfg.allow_custom_llm_endpoint,
             "llm_model": cfg.llm_model,
             "nvidia_api_key": "",
             "openai_api_key": "",
@@ -256,11 +298,33 @@ class SettingsPage(ctk.CTkFrame):
             self.vars[key].set(value)
         self._refresh_secret_statuses()
         self._refresh_model_options()
+        self._refresh_endpoint_state()
 
     def _on_provider_change(self, _value: str | None = None) -> None:
         provider = core.normalize_llm_provider(self.vars["llm_provider"].get())
         self.vars["llm_api_url"].set(core.default_llm_api_url(provider))
         self._refresh_model_options()
+
+    def _on_custom_endpoint_toggle(self) -> None:
+        if not bool(self.vars["allow_custom_llm_endpoint"].get()):
+            provider = core.normalize_llm_provider(
+                self.vars["llm_provider"].get()
+            )
+            self.vars["llm_api_url"].set(
+                core.default_llm_api_url(provider)
+            )
+        self._refresh_endpoint_state()
+
+    def _refresh_endpoint_state(self) -> None:
+        if self.api_url_entry is None:
+            return
+        self.api_url_entry.configure(
+            state=(
+                "normal"
+                if bool(self.vars["allow_custom_llm_endpoint"].get())
+                else "disabled"
+            )
+        )
 
     def _refresh_model_options(self) -> None:
         provider = core.normalize_llm_provider(self.vars["llm_provider"].get())
@@ -277,9 +341,24 @@ class SettingsPage(ctk.CTkFrame):
             for key, variable in self.vars.items()
             if key not in secret_fields
         }
-        values["remember_turns"] = int(str(values["remember_turns"]).strip())
-        values["max_cached_answers"] = int(str(values["max_cached_answers"]).strip())
-        values["command_confirmation_timeout_sec"] = int(str(values["command_confirmation_timeout_sec"]).strip())
+        values["remember_turns"] = clamp_int(
+            values["remember_turns"],
+            1,
+            100,
+            "Количество ходов памяти",
+        )
+        values["max_cached_answers"] = clamp_int(
+            values["max_cached_answers"],
+            1,
+            10_000,
+            "Максимум кэшированных ответов",
+        )
+        values["command_confirmation_timeout_sec"] = clamp_int(
+            values["command_confirmation_timeout_sec"],
+            5,
+            120,
+            "Автоотмена команды",
+        )
         return values
 
     def _refresh_secret_statuses(self) -> None:

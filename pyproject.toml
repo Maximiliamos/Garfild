@@ -34,6 +34,7 @@ dev = [
 [tool.setuptools]
 py-modules = [
     "garfield_best",
+    "garfield_config",
     "garfield_flagship",
     "garfield_flagship_legacy_tk",
     "garfield_intents",

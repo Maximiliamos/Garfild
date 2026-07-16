@@ -1,11 +1,12 @@
 {
   "assistant_name": "Гарфилд",
-  "vosk_model_path": "C:\\GARFILD\\models\\vosk-model-ru-0.22",
+  "vosk_model_path": "models/vosk-model-ru-0.22",
   "recognition_timeout_sec": 20,
   "llm_provider": "nvidia",
   "llm_api_url": "https://integrate.api.nvidia.com/v1/chat/completions",
   "llm_model": "meta/llama-3.1-8b-instruct",
   "use_llm": true,
+  "allow_custom_llm_endpoint": false,
   "nvidia_api_key_env": "NVIDIA_API_KEY",
   "openai_api_key_env": "OPENAI_API_KEY",
   "gemini_api_key_env": "GEMINI_API_KEY",
@@ -46,10 +47,10 @@
   "history_retention_days": 7,
   "log_max_bytes": 2000000,
   "log_backup_count": 3,
-  "skills_path": "D:\\8\\Coding\\Garfild\\garfield_skills.json",
+  "skills_path": "garfield_skills.json",
   "input_device_index": null,
   "output_device_index": null,
   "tts_voice": "ru-RU-DmitryNeural",
-  "piper_model_path": "D:\\8\\Coding\\Garfild\\models\\piper\\ru_RU-irina-medium.onnx",
-  "piper_config_path": "D:\\8\\Coding\\Garfild\\models\\piper\\ru_RU-irina-medium.onnx.json"
+  "piper_model_path": "models/piper/ru_RU-irina-medium.onnx",
+  "piper_config_path": "models/piper/ru_RU-irina-medium.onnx.json"
 }
