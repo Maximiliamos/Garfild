@@ -17,6 +17,7 @@ import wave
 from collections import OrderedDict
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote_plus
@@ -228,11 +229,20 @@ class AppConfig:
         return config
 
 
+class HistoryPolicy(str, Enum):
+    EXCLUDE = "exclude"
+    INCLUDE = "include"
+    INCLUDE_REDACTED = "include_redacted"
+
+
 @dataclass
 class AssistantReply:
     text: str
     should_exit: bool = False
     should_speak: bool = True
+    history_policy: HistoryPolicy = HistoryPolicy.EXCLUDE
+    sensitive: bool = False
+    action_id: str | None = None
 
 
 @dataclass
@@ -1822,21 +1832,42 @@ class AssistantCore:
         if self.config.require_name_prefix and not self._is_addressed_to_assistant(text):
             return None
 
+        reply = self._dispatch(text)
+        if reply is None:
+            return None
+
+        self.last_answer = reply.text
+        self._remember_reply(text, reply)
+        return reply
+
+    def _dispatch(self, text: str) -> AssistantReply | None:
         if self.pending_power_action:
             reply = self._handle_pending_power_action(text)
             if reply:
-                return self._remember(text, reply)
+                return reply
 
         builtin_reply = self._handle_builtin_command(text)
         if builtin_reply:
-            return self._remember(text, builtin_reply)
+            return builtin_reply
 
         skill_reply = self._handle_skill(text)
         if skill_reply:
-            return self._remember(text, skill_reply)
+            return skill_reply
 
         answer = self._ask_llm_or_fallback(text)
-        return self._remember(text, AssistantReply(answer))
+        return AssistantReply(
+            text=answer,
+            history_policy=HistoryPolicy.INCLUDE,
+        )
+
+    def _remember_reply(self, user_text: str, reply: AssistantReply) -> None:
+        if not reply.text or reply.history_policy is HistoryPolicy.EXCLUDE:
+            return
+
+        if reply.history_policy is HistoryPolicy.INCLUDE_REDACTED:
+            return
+
+        self.history.add(user_text, reply.text)
 
     def _is_addressed_to_assistant(self, text: str) -> bool:
         return self.config.assistant_name.lower() in text
@@ -2295,13 +2326,6 @@ class AssistantCore:
             "Не уверен в ответе. Попробуйте переформулировать вопрос "
             "или проверьте доступность выбранного ИИ-провайдера."
         )
-
-    def _remember(self, user_text: str, reply: AssistantReply) -> AssistantReply:
-        self.last_answer = reply.text
-        if reply.text:
-            self.history.add(user_text, reply.text)
-        return reply
-
 
 def create_input_source(config: AppConfig) -> tuple[object, str]:
     if config.input_mode == "keyboard":
