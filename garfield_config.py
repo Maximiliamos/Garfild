@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 
 def resolve_config_path(base_dir: Path, raw_path: str) -> Path:
@@ -20,7 +20,7 @@ def clamp_int(
     field_name: str,
 ) -> int:
     try:
-        parsed = int(value)
+        parsed = int(cast(Any, value))
     except (TypeError, ValueError) as error:
         raise ValueError(f"{field_name}: требуется целое число.") from error
     return max(minimum, min(parsed, maximum))

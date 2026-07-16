@@ -10,7 +10,7 @@ jobs:
 
     strategy:
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.11", "3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v4
@@ -18,20 +18,32 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: pip
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
 
       - name: Install
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+        run: uv sync --locked --extra dev
 
       - name: Compile
-        run: python -m compileall .
+        run: >-
+          uv run python -m compileall -q
+          garfield garfield_actions garfield_dashboard
+          garfield_best.py garfield_config.py garfield_flagship.py
+          garfield_flagship_legacy_tk.py garfield_intents.py garfield_io.py
+          garfield_llm.py garfield_privacy.py garfield_secrets.py garfield_skills.py
 
       - name: Ruff
         run: |
-          ruff check .
-          ruff format --check .
+          uv run ruff check .
+          uv run ruff format --check .
 
       - name: Tests
-        run: pytest -q
+        run: uv run pytest -q --cov --cov-report=term-missing
+
+      - name: Type check
+        run: uv run pyright
+
+      - name: Dependency audit
+        run: uv run pip-audit

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "garfild-assistant"
-version = "0.1.0"
+version = "0.2.0"
 description = "Локальный голосовой desktop-помощник"
 requires-python = ">=3.11,<3.14"
 dependencies = [
@@ -46,7 +46,7 @@ py-modules = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["garfield_actions*", "garfield_dashboard*"]
+include = ["garfield*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -55,6 +55,25 @@ markers = [
     "windows: требует Windows",
     "integration: интеграционный тест",
 ]
+
+[tool.coverage.run]
+branch = true
+source = [
+    "garfield_intents",
+    "garfield_actions",
+    "garfield_skills",
+    "garfield_privacy",
+    "garfield.runtime",
+]
+omit = [
+    "garfield/runtime/runtime.py",
+    "garfield_dashboard/*",
+]
+
+[tool.coverage.report]
+fail_under = 70
+show_missing = true
+skip_covered = true
 
 [tool.ruff]
 target-version = "py311"
@@ -94,6 +113,14 @@ quote-style = "double"
 [tool.pyright]
 pythonVersion = "3.11"
 typeCheckingMode = "basic"
+include = [
+    "garfield_config.py",
+    "garfield_intents.py",
+    "garfield_llm.py",
+    "garfield_privacy.py",
+    "garfield_secrets.py",
+    "garfield_actions",
+]
 exclude = [
     ".venv",
     "models",

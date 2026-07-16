@@ -595,7 +595,7 @@ def require_sounddevice():
         import sounddevice as sd
     except ImportError as error:
         raise RuntimeError(
-            "Не хватает sounddevice для работы со звуком. Установите зависимости из requirements.txt."
+            "Не хватает sounddevice для работы со звуком. Установите зависимости командой uv sync."
         ) from error
     return sd
 
@@ -1019,7 +1019,7 @@ class VoiceRecognizer:
         except ImportError as error:
             raise RuntimeError(
                 "Не хватает зависимостей для голосового режима. "
-                "Установите пакеты из requirements.txt."
+                "Установите зависимости командой uv sync."
             ) from error
 
         if not model_path.exists():

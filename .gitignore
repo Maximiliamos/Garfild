@@ -8,6 +8,11 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+build/
+dist/
+*.egg-info/
+.coverage
+.pytest_cache/
 models/
 voice_samples/
 llm_audit_results.json
