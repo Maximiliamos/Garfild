@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from garfield_best import validate_llm_api_url
+from garfield_best import AppConfig, normalize_llm_provider, validate_llm_api_url
 from garfield_config import clamp_int, resolve_config_path
 from garfield_flagship import FlagshipConfig
 
@@ -92,3 +92,18 @@ def test_broken_json_is_archived_and_defaults_are_loaded(
     assert backups[0].read_text(encoding="utf-8") == "{broken"
     assert config.assistant_name
     assert config.load_warnings
+
+
+@pytest.mark.parametrize("config_class", [AppConfig, FlagshipConfig])
+def test_invalid_activation_mode_falls_back_to_wake_word(
+    config_class,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / f"{config_class.__name__}.json"
+    path.write_text(json.dumps({"activation_mode": "invalid"}), encoding="utf-8")
+
+    assert config_class.load(path).activation_mode == "wake_word"
+
+
+def test_grok_provider_alias_maps_to_xai() -> None:
+    assert normalize_llm_provider("grok") == "xai"

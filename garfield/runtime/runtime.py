@@ -206,7 +206,7 @@ class FlagshipConfig:
         )
         config.activation_mode = config.activation_mode.lower().strip()
         if config.activation_mode not in {"continuous", "wake_word"}:
-            config.activation_mode = "continuous"
+            config.activation_mode = "wake_word"
         if isinstance(config.wake_words, str):
             config.wake_words = [part.strip() for part in config.wake_words.split(",") if part.strip()]
         config.wake_words = [core.normalize_text(word) for word in config.wake_words if core.normalize_text(word)]

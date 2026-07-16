@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from garfield_actions import ActionDefinition, ActionRegistry, ActionResult
+from garfield_actions import (
+    ActionContext,
+    ActionDefinition,
+    ActionRegistry,
+    ActionResult,
+    create_default_registry,
+)
 from garfield_intents import RiskLevel
 
 
@@ -47,3 +53,25 @@ def test_user_arguments_cannot_change_action_id() -> None:
             "assistant.say",
             {"text": "hello", "action_id": "system.shutdown"},
         )
+
+
+def test_text_actions_have_distinct_risk_levels() -> None:
+    registry = create_default_registry(
+        ActionContext(platform_name="Windows", desktop_enabled=True, power_enabled=False)
+    )
+
+    expected = {
+        "text.copy": RiskLevel.VISIBLE,
+        "text.select_all": RiskLevel.VISIBLE,
+        "text.paste": RiskLevel.SENSITIVE,
+        "text.cut": RiskLevel.DESTRUCTIVE,
+        "text.delete_last_word": RiskLevel.DESTRUCTIVE,
+        "text.delete_all": RiskLevel.DESTRUCTIVE,
+        "message.send": RiskLevel.DESTRUCTIVE,
+        "text.undo": RiskLevel.VISIBLE,
+        "text.save_as": RiskLevel.VISIBLE,
+    }
+
+    assert {action_id: registry.get(action_id).risk for action_id in expected} == expected
+    with pytest.raises(ValueError):
+        registry.get("text.shortcut")

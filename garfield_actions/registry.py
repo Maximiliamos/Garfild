@@ -114,8 +114,37 @@ def create_default_registry(context: ActionContext) -> ActionRegistry:
             RiskLevel.DESTRUCTIVE,
         ),
     ]
+    for action_id, label, hotkey_action, risk in (
+        ("text.copy", "Копирование текста", "copy", RiskLevel.VISIBLE),
+        ("text.select_all", "Выделение всего текста", "select_all", RiskLevel.VISIBLE),
+        ("text.paste", "Вставка из буфера обмена", "paste", RiskLevel.SENSITIVE),
+        ("text.cut", "Вырезание текста", "cut", RiskLevel.DESTRUCTIVE),
+        (
+            "text.delete_last_word",
+            "Удаление последнего слова",
+            "delete_last_word",
+            RiskLevel.DESTRUCTIVE,
+        ),
+        ("text.delete_all", "Удаление всего текста", "delete_all", RiskLevel.DESTRUCTIVE),
+        ("message.send", "Отправка сообщения", "send", RiskLevel.DESTRUCTIVE),
+        ("text.undo", "Отмена последнего действия", "undo", RiskLevel.VISIBLE),
+        ("text.save_as", "Сохранение под новым именем", "save_as", RiskLevel.VISIBLE),
+    ):
+        definitions.append(
+            ActionDefinition(
+                action_id,
+                label,
+                partial(
+                    invoke_controller_action,
+                    context,
+                    method_name="text_hotkey",
+                    action=hotkey_action,
+                ),
+                risk,
+            )
+        )
     legacy_definitions = (
-        ("text.shortcut", "Текстовая команда", "text_hotkey", RiskLevel.VISIBLE, {"action"}),
+        ("text.format", "Форматирование текста", "text_hotkey", RiskLevel.VISIBLE, {"action"}),
         ("text.navigate", "Навигация по тексту", "navigate_text", RiskLevel.VISIBLE, {"action"}),
         ("input_language.switch", "Смена языка ввода", "switch_input_language", RiskLevel.VISIBLE, set()),
         ("browser.shortcut", "Команда браузера", "browser_hotkey", RiskLevel.VISIBLE, {"action"}),

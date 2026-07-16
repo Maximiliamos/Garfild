@@ -37,6 +37,7 @@ from garfield_intents import (
     confirmation_token,
     is_cancellation,
     is_confirmation,
+    is_non_action_request,
     requires_confirmation,
 )
 from garfield_llm import (
@@ -247,7 +248,7 @@ class AppConfig:
         )
         config.activation_mode = config.activation_mode.lower().strip()
         if config.activation_mode not in {"continuous", "wake_word"}:
-            config.activation_mode = "continuous"
+            config.activation_mode = "wake_word"
         if isinstance(config.wake_words, str):
             config.wake_words = [part.strip() for part in config.wake_words.split(",") if part.strip()]
         config.wake_words = [normalize_text(word) for word in config.wake_words if normalize_text(word)]
@@ -1165,7 +1166,7 @@ def normalize_llm_provider(provider: str) -> str:
         "google_gemini": "gemini",
         "google-gemini": "gemini",
         "openai-chat": "openai",
-        "grok": "groq",
+        "grok": "xai",
         "x-ai": "xai",
     }
     value = aliases.get(value, value)
@@ -1756,6 +1757,9 @@ class AssistantCore:
         return "\n".join(chunks)
 
     def _handle_builtin_command(self, text: str) -> Optional[AssistantReply]:
+        if is_non_action_request(text):
+            return None
+
         if contains_any(text, ("остановись", "выход", "стоп", "пока", "заверши")):
             return AssistantReply("Завершаю работу. До свидания.", should_exit=True)
 
@@ -1792,55 +1796,55 @@ class AssistantCore:
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return self._execute_registered_action("text.shortcut", {"action": "copy"})
+            return self._execute_registered_action("text.copy")
 
         if contains_any(text, ("вырежи", "вырезать")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return self._execute_registered_action("text.shortcut", {"action": "cut"})
+            return self._execute_registered_action("text.cut")
 
         if contains_any(text, ("вставь", "вставить")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return self._execute_registered_action("text.shortcut", {"action": "paste"})
+            return self._execute_registered_action("text.paste")
 
         if contains_any(text, ("выдели всё", "выдели все", "выделить всё", "выделить все")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return self._execute_registered_action("text.shortcut", {"action": "select_all"})
+            return self._execute_registered_action("text.select_all")
 
         if contains_any(text, ("удали последнее слово", "стереть последнее слово")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return self._execute_registered_action("text.shortcut", {"action": "delete_last_word"})
+            return self._execute_registered_action("text.delete_last_word")
 
         if contains_any(text, ("удали весь текст", "очисти текст", "стереть весь текст")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return self._execute_registered_action("text.shortcut", {"action": "delete_all"})
+            return self._execute_registered_action("text.delete_all")
 
         if contains_any(text, ("отправь сообщение", "отправить сообщение", "нажми enter", "нажми энтер")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return self._execute_registered_action("text.shortcut", {"action": "send"})
+            return self._execute_registered_action("message.send")
 
         if contains_any(text, ("отмени действие", "отмена последнего действия", "undo")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return self._execute_registered_action("text.shortcut", {"action": "undo"})
+            return self._execute_registered_action("text.undo")
 
         if contains_any(text, ("сохрани как", "сохранить как")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return self._execute_registered_action("text.shortcut", {"action": "save_as"})
+            return self._execute_registered_action("text.save_as")
 
         text_navigation = {
             ("в начало документа", "перейди в начало документа", "в самое начало"): "document_start",
@@ -1870,7 +1874,7 @@ class AssistantCore:
                 disabled = self._desktop_unavailable()
                 if disabled:
                     return disabled
-                return self._execute_registered_action("text.shortcut", {"action": action})
+                return self._execute_registered_action("text.format", {"action": action})
 
         if contains_any(text, ("смени язык", "переключи язык", "смена языка ввода")):
             disabled = self._desktop_unavailable()

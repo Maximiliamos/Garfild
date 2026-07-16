@@ -12,5 +12,9 @@
 - Ядро и runtime перенесены в пакет `garfield` с compatibility-адаптерами.
 - Все legacy desktop-команды переведены на Action Registry; риск берётся только из registry.
 - В wheel включены JSON Schema для конфигурации и skills v2.
+- Закрыт обход отрицаний и описательных фраз через legacy command fallback.
+- Текстовые действия разделены по риску; отправка сообщения требует контекстного подтверждения.
+- Некорректный `activation_mode` безопасно возвращается к `wake_word`.
+- Alias `grok` исправлен на провайдера xAI.
 
 Это preview-релиз, не 1.0.

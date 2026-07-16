@@ -63,6 +63,28 @@ def normalize_command_text(text: str) -> str:
     return SPACE_RE.sub(" ", text).strip()
 
 
+NON_ACTION_PREFIXES = (
+    "расскажи ",
+    "объясни ",
+    "что значит ",
+    "как работает ",
+    "почему ",
+)
+NEGATED_REQUEST_PREFIXES = (
+    "не ",
+    "пожалуйста не ",
+    "прошу не ",
+    "только не ",
+    "ни в коем случае не ",
+)
+
+
+def is_non_action_request(raw_text: str) -> bool:
+    """Return true when command-looking text is explicitly not an instruction."""
+    text = normalize_command_text(raw_text)
+    return text.startswith(NEGATED_REQUEST_PREFIXES) or text.startswith(NON_ACTION_PREFIXES)
+
+
 NEGATION_WORDS = {
     "не",
     "нет",
@@ -134,6 +156,10 @@ CONFIRMATION_TOKENS = {
     "system.shutdown": "выключение компьютера",
     "system.restart": "перезагрузку компьютера",
     "system.sleep": "переход компьютера в спящий режим",
+    "text.cut": "вырезание текста",
+    "text.delete_last_word": "удаление последнего слова",
+    "text.delete_all": "удаление всего текста",
+    "message.send": "отправку сообщения",
 }
 
 

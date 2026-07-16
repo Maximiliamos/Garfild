@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from garfield_actions import ActionDefinition, ActionResult
 from garfield_best import AssistantCore, HistoryPolicy
 from garfield_intents import Intent, RiskLevel
@@ -31,24 +33,69 @@ def test_power_command_stays_disabled_by_default(tmp_path: Path) -> None:
     assert assistant.history.turns == []
 
 
-def test_negated_close_window_does_not_execute_desktop_action(monkeypatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "command",
+    [
+        "не закрой окно",
+        "не отправь сообщение",
+        "не открой браузер",
+        "не очисти корзину",
+        "не выключи компьютер",
+        "пожалуйста, не закрой окно",
+        "расскажи про выход",
+        "объясни команду отправь сообщение",
+        "почему не открой браузер",
+    ],
+)
+def test_negated_or_descriptive_command_does_not_execute_action(
+    command: str,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
     config = FakeConfig(
         skills_path=str(tmp_path / "skills.json"),
         enable_desktop_commands=True,
     )
     assistant = AssistantCore(config)
-    called = False
+    calls: list[tuple[str, dict[str, object]]] = []
 
-    def close_window() -> str:
-        nonlocal called
-        called = True
-        return "Закрываю окно."
+    def execute(action_id: str, arguments: dict[str, object]) -> ActionResult:
+        calls.append((action_id, arguments))
+        return ActionResult(True, "unexpected")
 
-    monkeypatch.setattr(assistant.desktop, "close_window", close_window)
+    monkeypatch.setattr(assistant.actions, "execute", execute)
 
-    assistant.handle("не закрывай окно")
+    reply = assistant.handle(command)
 
-    assert called is False
+    assert calls == []
+    assert assistant.pending_action is None
+    assert reply is None or reply.should_exit is False
+
+
+def test_message_send_requires_contextual_confirmation(monkeypatch, tmp_path: Path) -> None:
+    assistant = AssistantCore(
+        FakeConfig(
+            skills_path=str(tmp_path / "skills.json"),
+            enable_desktop_commands=True,
+        )
+    )
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def execute(action_id: str, arguments: dict[str, object]) -> ActionResult:
+        calls.append((action_id, arguments))
+        return ActionResult(True, "Сообщение отправлено.")
+
+    monkeypatch.setattr(assistant.actions, "execute", execute)
+
+    prompt = assistant.handle("отправь сообщение")
+    plain_confirmation = assistant.handle("подтверждаю")
+    confirmed = assistant.handle("подтверждаю отправку сообщения")
+
+    assert prompt is not None and "Подтвердите" in prompt.text
+    assert plain_confirmation is not None and "Для подтверждения" in plain_confirmation.text
+    assert confirmed is not None and confirmed.text == "Сообщение отправлено."
+    assert calls == [("message.send", {})]
+    assert assistant.pending_action is None
 
 
 def test_destructive_action_requires_full_confirmation(monkeypatch, tmp_path: Path) -> None:
