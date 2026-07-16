@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 import garfield_best as core
 from garfield_io import atomic_write_text
+from garfield_privacy import redact_sensitive_text
 from garfield_secrets import PROVIDERS, SecretStore
 
 
@@ -168,6 +169,60 @@ class RuntimeAdapter:
 
     def clear_session_history(self) -> None:
         self.runtime.session_lines.clear()
+
+    def redact_for_storage(self, text: str, *, sensitive: bool = False) -> str:
+        if sensitive:
+            return "[Чувствительные данные скрыты]"
+        secrets: list[str] = []
+        for provider in PROVIDERS:
+            try:
+                value = self.secret_store.get(provider)
+            except Exception:
+                value = ""
+            if value:
+                secrets.append(value)
+        return redact_sensitive_text(text, secrets)
+
+    def delete_saved_history(self) -> list[Path]:
+        paths = [
+            self.paths.session_log_path,
+            self.paths.base_dir / "garfield_session_history_export.txt",
+            self.paths.base_dir / "garfield_session_history_export.json",
+        ]
+        deleted: list[Path] = []
+        for path in paths:
+            if path.exists():
+                path.unlink()
+                deleted.append(path)
+        return deleted
+
+    def export_history(self, records: list[dict[str, Any]]) -> tuple[Path, Path]:
+        safe_records: list[dict[str, Any]] = []
+        for record in records:
+            if not record.get("persist", True):
+                continue
+            safe_record = dict(record)
+            safe_record["text"] = self.redact_for_storage(
+                str(record.get("text", "")),
+                sensitive=bool(record.get("sensitive", False)),
+            )
+            safe_records.append(safe_record)
+
+        txt_path = self.paths.base_dir / "garfield_session_history_export.txt"
+        json_path = self.paths.base_dir / "garfield_session_history_export.json"
+        atomic_write_text(
+            txt_path,
+            "\n".join(
+                f"{item['timestamp']} | {str(item['role']).upper()}: {item['text']}"
+                for item in safe_records
+            )
+            + ("\n" if safe_records else ""),
+        )
+        atomic_write_text(
+            json_path,
+            json.dumps(safe_records, ensure_ascii=False, indent=2) + "\n",
+        )
+        return txt_path, json_path
 
     def open_project_folder(self) -> str:
         os.startfile(str(self.paths.base_dir))

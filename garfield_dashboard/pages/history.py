@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import tkinter as tk
 from dataclasses import dataclass, asdict
 from datetime import datetime
@@ -19,6 +18,8 @@ class HistoryItem:
     role: str
     text: str
     timestamp: str
+    sensitive: bool = False
+    persist: bool = True
 
 
 class HistoryPage(ctk.CTkFrame):
@@ -91,15 +92,24 @@ class HistoryPage(ctk.CTkFrame):
         actions.grid(row=2, column=0, sticky="ew", pady=(14, 0))
         actions.grid_columnconfigure(0, weight=1)
         action_button(actions, "Сохранить историю", self.save_history, tone="ghost", width=160).grid(row=0, column=1, padx=(0, 10))
-        action_button(actions, "Очистить историю", self.clear_history, tone="danger", width=160).grid(row=0, column=2, padx=(0, 10))
-        action_button(actions, "Экспортировать", self.export_history, width=160).grid(row=0, column=3)
+        action_button(actions, "Очистить текущий экран", self.clear_screen, tone="ghost", width=180).grid(row=0, column=2, padx=(0, 10))
+        action_button(actions, "Удалить историю с диска", self.delete_saved_history, tone="danger", width=190).grid(row=0, column=3, padx=(0, 10))
+        action_button(actions, "Экспортировать", self.export_history, width=160).grid(row=0, column=4)
 
     def add_event(self, event: Any) -> None:
         role = getattr(event, "kind", "status")
         text = getattr(event, "text", "")
         created_at = getattr(event, "created_at", None)
         timestamp = datetime.fromtimestamp(created_at).strftime("%Y-%m-%d %H:%M:%S") if created_at else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.items.append(HistoryItem(role, text, timestamp))
+        self.items.append(
+            HistoryItem(
+                role,
+                text,
+                timestamp,
+                sensitive=bool(getattr(event, "sensitive", False)),
+                persist=bool(getattr(event, "persist", True)),
+            )
+        )
         self.render()
 
     def render(self) -> None:
@@ -158,25 +168,34 @@ class HistoryPage(ctk.CTkFrame):
         except Exception as error:
             self.app.show_notice(f"Не удалось сохранить историю: {error}", "danger")
 
-    def clear_history(self) -> None:
-        def clear() -> None:
-            self.items.clear()
-            self.adapter.clear_session_history()
-            self.render()
-            self.app.show_notice("История текущей сессии очищена.", "success")
-            self.adapter.log_action("История текущей сессии очищена.")
+    def clear_screen(self) -> None:
+        self.items.clear()
+        self.adapter.clear_session_history()
+        self.render()
+        self.app.show_notice("Текущий экран истории очищен.", "success")
+        self.adapter.log_action("Текущий экран истории очищен.")
 
-        ConfirmDialog(self, "Очистить историю", "Очистить список сообщений текущей сессии?", clear, confirm_text="Очистить", danger=True)
+    def delete_saved_history(self) -> None:
+        def delete() -> None:
+            deleted = self.adapter.delete_saved_history()
+            self.app.show_notice(
+                f"Удалено файлов истории: {len(deleted)}.",
+                "warning",
+            )
+            self.adapter.log_action("Сохранённая история удалена с диска.")
+
+        ConfirmDialog(
+            self,
+            "Удалить сохранённую историю",
+            "Удалить основную историю и все TXT/JSON-экспорты с диска?",
+            delete,
+            confirm_text="Удалить",
+            danger=True,
+        )
 
     def export_history(self) -> None:
         try:
-            txt_path = self.adapter.paths.base_dir / "garfield_session_history_export.txt"
-            json_path = self.adapter.paths.base_dir / "garfield_session_history_export.json"
-            txt_path.write_text(
-                "\n".join(f"{item.timestamp} | {item.role.upper()}: {item.text}" for item in self.items) + "\n",
-                encoding="utf-8",
-            )
-            json_path.write_text(json.dumps([asdict(item) for item in self.items], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            self.adapter.export_history([asdict(item) for item in self.items])
             self.app.show_notice("История экспортирована в TXT и JSON.", "success")
             self.adapter.log_action("История экспортирована в TXT и JSON.")
         except Exception as error:

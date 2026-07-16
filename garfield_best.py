@@ -18,6 +18,7 @@ from collections import OrderedDict
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from enum import Enum
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote_plus
@@ -36,8 +37,12 @@ from garfield_intents import (
     is_confirmation,
     requires_confirmation,
 )
-from garfield_privacy import looks_sensitive, redact_sensitive_text
-from garfield_secrets import SecretStore, migrate_plaintext_secrets
+from garfield_privacy import (
+    SecretRedactingFilter,
+    looks_sensitive,
+    redact_sensitive_text,
+)
+from garfield_secrets import PROVIDERS, SecretStore, migrate_plaintext_secrets
 from garfield_skills import SkillRegistry as SafeSkillRegistry
 
 try:
@@ -109,6 +114,11 @@ class AppConfig:
     screen_hints_enabled: bool = True
     remember_turns: int = 6
     max_cached_answers: int = 120
+    persist_session_history: bool = False
+    redact_sensitive_logs: bool = True
+    history_retention_days: int = 7
+    log_max_bytes: int = 2_000_000
+    log_backup_count: int = 3
     skills_path: str = ""
     input_device_index: int | None = None
     output_device_index: int | None = None
@@ -452,14 +462,39 @@ def resolve_piper_executable() -> str | None:
     return None
 
 
-def setup_logging() -> None:
+def _stored_secrets() -> list[str]:
+    store = SecretStore()
+    secrets: list[str] = []
+    for provider in PROVIDERS:
+        try:
+            value = store.get(provider)
+        except Exception:
+            value = ""
+        if value:
+            secrets.append(value)
+    return secrets
+
+
+def setup_logging(config: AppConfig) -> None:
+    file_handler = RotatingFileHandler(
+        LOG_PATH,
+        maxBytes=config.log_max_bytes,
+        backupCount=config.log_backup_count,
+        encoding="utf-8",
+    )
+    stream_handler = logging.StreamHandler(sys.stdout)
+    if config.redact_sensitive_logs:
+        redacting_filter = SecretRedactingFilter(_stored_secrets)
+        file_handler.addFilter(redacting_filter)
+        stream_handler.addFilter(redacting_filter)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
         handlers=[
-            logging.FileHandler(LOG_PATH, encoding="utf-8"),
-            logging.StreamHandler(sys.stdout),
+            file_handler,
+            stream_handler,
         ],
+        force=True,
     )
 
 
@@ -2459,16 +2494,14 @@ def create_input_source(config: AppConfig) -> tuple[object, str]:
 
 
 def main() -> int:
-    setup_logging()
-    logging.info("Запуск Garfield BEST")
-
     try:
         config = AppConfig.load(CONFIG_PATH)
     except Exception as error:
-        logging.error("Не удалось загрузить конфиг: %s", error)
         print(error)
         return 1
 
+    setup_logging(config)
+    logging.info("Запуск Garfield BEST")
     speaker = Speaker(
         config.assistant_name,
         config.output_device_index,
@@ -2515,7 +2548,10 @@ def main() -> int:
             logging.info("Пустой ввод или речь не распознана.")
             continue
 
-        logging.info("Пользователь: %s", text)
+        logging.info(
+            "Получена пользовательская команда%s.",
+            " с чувствительными данными" if looks_sensitive(text) else "",
+        )
         reply = assistant.handle(text)
         if reply is None:
             logging.info("Команда проигнорирована.")

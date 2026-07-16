@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import logging
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 SENSITIVE_COMMAND_PATTERNS = (
     re.compile(r"\bнапечатай\s+(?:пароль|код|токен|ключ)\b", re.IGNORECASE),
@@ -38,3 +39,18 @@ def redact_sensitive_text(
     result = BEARER_PATTERN.sub("Bearer [REDACTED]", result)
     result = GENERIC_SECRET_PATTERN.sub("[REDACTED]", result)
     return result
+
+
+class SecretRedactingFilter(logging.Filter):
+    def __init__(self, secret_supplier: Callable[[], Iterable[str]]) -> None:
+        super().__init__()
+        self.secret_supplier = secret_supplier
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        record.msg = redact_sensitive_text(
+            message,
+            self.secret_supplier(),
+        )
+        record.args = ()
+        return True

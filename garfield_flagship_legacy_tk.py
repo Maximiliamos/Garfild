@@ -10,6 +10,7 @@ import time
 import ctypes
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 try:
@@ -22,6 +23,9 @@ except ImportError:
     ttk = None
 
 import garfield_best as core
+from garfield_io import atomic_write_text
+from garfield_privacy import SecretRedactingFilter, looks_sensitive, redact_sensitive_text
+from garfield_secrets import PROVIDERS, SecretStore
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -52,6 +56,11 @@ class FlagshipConfig:
     auto_listen: bool = True
     tts_enabled: bool = True
     max_cached_answers: int = 120
+    persist_session_history: bool = False
+    redact_sensitive_logs: bool = True
+    history_retention_days: int = 7
+    log_max_bytes: int = 2_000_000
+    log_backup_count: int = 3
     skills_path: str = ""
     input_device_index: int | None = None
     output_device_index: int | None = None
@@ -125,23 +134,50 @@ class RuntimeEvent:
     kind: str
     text: str
     created_at: float
+    sensitive: bool = False
+    persist: bool = True
 
 
-def setup_logging() -> None:
+def _stored_secrets() -> list[str]:
+    store = SecretStore()
+    secrets: list[str] = []
+    for provider in PROVIDERS:
+        try:
+            value = store.get(provider)
+        except Exception:
+            value = ""
+        if value:
+            secrets.append(value)
+    return secrets
+
+
+def setup_logging(config: FlagshipConfig) -> None:
+    file_handler = RotatingFileHandler(
+        LOG_PATH,
+        maxBytes=config.log_max_bytes,
+        backupCount=config.log_backup_count,
+        encoding="utf-8",
+    )
+    stream_handler = logging.StreamHandler(sys.stdout)
+    if config.redact_sensitive_logs:
+        redacting_filter = SecretRedactingFilter(_stored_secrets)
+        file_handler.addFilter(redacting_filter)
+        stream_handler.addFilter(redacting_filter)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
         handlers=[
-            logging.FileHandler(LOG_PATH, encoding="utf-8"),
-            logging.StreamHandler(sys.stdout),
+            file_handler,
+            stream_handler,
         ],
+        force=True,
     )
 
 
 def save_config(config: FlagshipConfig, path: Path = CONFIG_PATH) -> None:
-    path.write_text(
+    atomic_write_text(
+        path,
         json.dumps(asdict(config), ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
     )
 
 
@@ -277,10 +313,31 @@ class FlagshipRuntime:
         self.tts.stop()
         self._save_session_history()
 
-    def emit(self, kind: str, text: str) -> None:
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.session_lines.append(f"{timestamp} | {kind.upper()}: {text}")
-        self.events.put(RuntimeEvent(kind, text, time.time()))
+    def emit(
+        self,
+        kind: str,
+        text: str,
+        *,
+        sensitive: bool = False,
+        persist: bool = True,
+    ) -> None:
+        stored_text = (
+            "[Чувствительные данные скрыты]"
+            if sensitive
+            else redact_sensitive_text(text, self.assistant._known_secrets())
+        )
+        if persist and self.config.persist_session_history:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.session_lines.append(f"{timestamp} | {kind.upper()}: {stored_text}")
+        self.events.put(
+            RuntimeEvent(
+                kind,
+                text,
+                time.time(),
+                sensitive=sensitive,
+                persist=persist,
+            )
+        )
 
     def submit_text(self, text: str, source: str = "manual") -> None:
         normalized = core.normalize_text(text)
@@ -494,7 +551,14 @@ class FlagshipRuntime:
             except queue.Empty:
                 continue
 
-            self.emit("user", f"[{source}] {text}")
+            if looks_sensitive(text):
+                self.emit(
+                    "user",
+                    f"[{source}] Команда локального ввода текста",
+                    sensitive=True,
+                )
+            else:
+                self.emit("user", f"[{source}] {text}")
             runtime_reply = self._handle_runtime_command(text)
             if runtime_reply is not None:
                 self.emit("assistant", runtime_reply.text)
@@ -619,7 +683,10 @@ class FlagshipRuntime:
     def _save_session_history(self) -> Path:
         if not self.session_lines:
             return SESSION_LOG_PATH
-        SESSION_LOG_PATH.write_text("\n".join(self.session_lines) + "\n", encoding="utf-8")
+        atomic_write_text(
+            SESSION_LOG_PATH,
+            "\n".join(self.session_lines) + "\n",
+        )
         return SESSION_LOG_PATH
 
 
@@ -1141,16 +1208,14 @@ def run_console(runtime: FlagshipRuntime) -> int:
 
 
 def main() -> int:
-    setup_logging()
-    logging.info("Запуск Garfield Flagship")
-
     try:
         config = FlagshipConfig.load(CONFIG_PATH)
     except Exception as error:
-        logging.error("Не удалось загрузить конфиг: %s", error)
         print(error)
         return 1
 
+    setup_logging(config)
+    logging.info("Запуск Garfield Flagship")
     runtime = FlagshipRuntime(config)
     ui_mode = choose_ui_mode(config)
 
