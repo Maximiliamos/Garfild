@@ -1,0 +1,90 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "garfild-assistant"
+version = "0.1.0"
+description = "Локальный голосовой desktop-помощник"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "requests>=2.32",
+    "customtkinter>=5.2.2",
+    "sounddevice>=0.4.7",
+    "vosk>=0.3.45",
+    "pyttsx3>=2.98",
+    "pyautogui>=0.9.54",
+    "numpy>=1.26",
+    "edge-tts>=7.2.8",
+    "piper-tts>=1.4.1",
+    "pathvalidate>=3.3.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "pytest-timeout>=2.3",
+    "ruff>=0.12",
+    "pyright>=1.1",
+    "pip-audit>=2.9",
+]
+
+[tool.setuptools]
+py-modules = [
+    "garfield_best",
+    "garfield_flagship",
+    "garfield_flagship_legacy_tk",
+]
+
+[tool.setuptools.packages.find]
+include = ["garfield_dashboard*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --timeout=15"
+markers = [
+    "windows: требует Windows",
+    "integration: интеграционный тест",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+exclude = [
+    ".venv",
+    "models",
+    "garfield_best.py",
+    "garfield_flagship.py",
+    "garfield_flagship_legacy_tk.py",
+    "garfield_dashboard",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "W",
+    "I",
+    "B",
+    "UP",
+    "SIM",
+    "RUF",
+]
+ignore = [
+    "E501",
+    "RUF001",
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+exclude = [
+    ".venv",
+    "models",
+]
