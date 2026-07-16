@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 import ctypes
+import uuid
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
@@ -342,6 +343,8 @@ class FlagshipRuntime:
         self.started = False
         self.session_lines: list[str] = []
         self.wake_active_until = 0.0
+        self.command_worker_last_activity = time.monotonic()
+        self.command_worker_last_error: str | None = None
 
     def start(self) -> None:
         if self.started:
@@ -605,37 +608,56 @@ class FlagshipRuntime:
     def _command_worker_loop(self) -> None:
         while not self.stop_event.is_set():
             try:
-                text, source = self.command_queue.get(timeout=0.2)
+                item = self.command_queue.get(timeout=0.2)
             except queue.Empty:
                 continue
 
-            self.emit("user", f"[{source}] {text}")
-            self.emit("progress", self._command_progress_text(text))
-            runtime_reply = self._handle_runtime_command(text)
-            if runtime_reply is not None:
-                self.emit("assistant", runtime_reply.text)
-                if runtime_reply.should_speak:
-                    self.tts.speak(runtime_reply.text)
-                if runtime_reply.should_exit:
-                    self.stop_event.set()
+            self.command_worker_last_activity = time.monotonic()
+            try:
+                text, source = item
+                self._process_command(text, source)
+            except Exception:
+                error_id = uuid.uuid4().hex[:8]
+                self.command_worker_last_error = error_id
+                logging.exception(
+                    "Необработанная ошибка command worker. error_id=%s",
+                    error_id,
+                )
+                self.emit(
+                    "assistant",
+                    (
+                        "Не удалось выполнить команду. "
+                        f"Код ошибки: {error_id}. Подробности записаны в журнал."
+                    ),
+                )
+            finally:
+                self.command_worker_last_activity = time.monotonic()
                 self.command_queue.task_done()
-                continue
 
-            reply = self.assistant.handle(text)
-            if reply is None:
-                self.emit("status", "Команда проигнорирована.")
-                self.command_queue.task_done()
-                continue
+    def _process_command(self, text: str, source: str) -> None:
+        self.emit("user", f"[{source}] {text}")
+        self.emit("progress", self._command_progress_text(text))
 
-            if reply.text:
-                self.emit("assistant", reply.text)
-                if reply.should_speak:
-                    self.tts.speak(reply.text)
+        runtime_reply = self._handle_runtime_command(text)
+        if runtime_reply is not None:
+            self._publish_reply(runtime_reply)
+            return
 
-            if reply.should_exit:
-                self.stop_event.set()
+        reply = self.assistant.handle(text)
+        if reply is None:
+            self.emit("status", "Команда проигнорирована.")
+            return
 
-            self.command_queue.task_done()
+        self._publish_reply(reply)
+
+    def _publish_reply(self, reply: core.AssistantReply) -> None:
+        if reply.text:
+            self.emit("assistant", reply.text)
+            if reply.should_speak:
+                self.tts.speak(reply.text)
+
+        if reply.should_exit:
+            self.stop_event.set()
 
     def _command_progress_text(self, text: str) -> str:
         if self._is_stop_speaking_command(text):
