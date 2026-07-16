@@ -52,3 +52,22 @@ def test_llm_dialogue_is_added_to_history(tmp_path: Path) -> None:
         ("объясни квантовую запутанность", "Краткое объяснение"),
     ]
     assert fake_llm.calls[0]["history"] == []
+
+
+def test_sensitive_llm_dialogue_is_redacted_in_history(tmp_path: Path) -> None:
+    config = FakeConfig(skills_path=str(tmp_path / "skills.json"))
+    config.openai_api_key = "known-secret-value"
+    assistant = AssistantCore(config)
+    assistant.llm_client = FakeLLM("Ключ known-secret-value или xai-abcdefghijklmnop использовать нельзя")
+
+    reply = assistant.handle("Почему token known-secret-value и xai-abcdefghijklmnop не работает?")
+
+    assert reply is not None
+    assert reply.sensitive is True
+    assert reply.history_policy is HistoryPolicy.INCLUDE_REDACTED
+    assert assistant.history.turns == [
+        (
+            "почему token [REDACTED] и [REDACTED] не работает?",
+            "Ключ [REDACTED] или [REDACTED] использовать нельзя",
+        ),
+    ]

@@ -24,6 +24,8 @@ from urllib.parse import quote_plus
 
 import requests
 
+from garfield_privacy import looks_sensitive, redact_sensitive_text
+
 try:
     import pyautogui
 except ImportError:
@@ -1855,9 +1857,15 @@ class AssistantCore:
             return skill_reply
 
         answer = self._ask_llm_or_fallback(text)
+        sensitive = looks_sensitive(text)
         return AssistantReply(
             text=answer,
-            history_policy=HistoryPolicy.INCLUDE,
+            history_policy=(
+                HistoryPolicy.INCLUDE_REDACTED
+                if sensitive
+                else HistoryPolicy.INCLUDE
+            ),
+            sensitive=sensitive,
         )
 
     def _remember_reply(self, user_text: str, reply: AssistantReply) -> None:
@@ -1865,9 +1873,26 @@ class AssistantCore:
             return
 
         if reply.history_policy is HistoryPolicy.INCLUDE_REDACTED:
-            return
+            known_secrets = self._known_secrets()
+            user_text = redact_sensitive_text(user_text, known_secrets)
+            assistant_text = redact_sensitive_text(reply.text, known_secrets)
+        else:
+            assistant_text = reply.text
 
-        self.history.add(user_text, reply.text)
+        self.history.add(user_text, assistant_text)
+
+    def _known_secrets(self) -> list[str]:
+        secrets: list[str] = []
+        for provider in ("nvidia", "openai", "gemini", "groq", "xai"):
+            env_name = str(getattr(self.config, f"{provider}_api_key_env", "")).strip()
+            explicit_key = str(getattr(self.config, f"{provider}_api_key", "")).strip()
+            if env_name:
+                env_key = os.getenv(env_name, "").strip()
+                if env_key:
+                    secrets.append(env_key)
+            if explicit_key:
+                secrets.append(explicit_key)
+        return secrets
 
     def _is_addressed_to_assistant(self, text: str) -> bool:
         return self.config.assistant_name.lower() in text
