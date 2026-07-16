@@ -9,6 +9,7 @@ import threading
 import time
 import ctypes
 import uuid
+from collections import deque
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -291,7 +292,7 @@ class TTSQueue:
             piper_config_path,
         )
         self.enabled = enabled
-        self.queue: queue.Queue[str | None] = queue.Queue()
+        self.queue: queue.Queue[str | None] = queue.Queue(maxsize=32)
         self.stop_event = threading.Event()
         self.busy_event = threading.Event()
         self.worker = threading.Thread(target=self._worker_loop, daemon=True)
@@ -309,12 +310,24 @@ class TTSQueue:
             return
         self.stop_event.set()
         self.speaker.interrupt()
-        self.queue.put(None)
+        while True:
+            try:
+                self.queue.get_nowait()
+                self.queue.task_done()
+            except queue.Empty:
+                break
+        try:
+            self.queue.put_nowait(None)
+        except queue.Full:
+            logging.warning("Не удалось остановить очередь озвучки штатно.")
         self.worker.join(timeout=5)
 
     def speak(self, text: str) -> None:
         if self.enabled and text.strip():
-            self.queue.put(text)
+            try:
+                self.queue.put_nowait(text)
+            except queue.Full:
+                logging.warning("Очередь озвучки заполнена.")
 
     def interrupt(self) -> None:
         self.speaker.interrupt()
@@ -323,8 +336,7 @@ class TTSQueue:
                 item = self.queue.get_nowait()
             except queue.Empty:
                 break
-            if item is not None:
-                self.queue.task_done()
+            self.queue.task_done()
 
     def set_output_device(self, output_device_index: int | None) -> None:
         self.speaker.set_output_device(output_device_index)
@@ -336,9 +348,10 @@ class TTSQueue:
         return self.busy_event.is_set() or not self.queue.empty()
 
     def _worker_loop(self) -> None:
-        while not self.stop_event.is_set():
+        while True:
             item = self.queue.get()
             if item is None:
+                self.queue.task_done()
                 return
             self.busy_event.set()
             try:
@@ -368,13 +381,15 @@ class FlagshipRuntime:
             config.piper_model_path,
             config.piper_config_path,
         )
-        self.events: queue.Queue[RuntimeEvent] = queue.Queue()
-        self.command_queue: queue.Queue[tuple[str, str]] = queue.Queue()
+        self.events: queue.Queue[RuntimeEvent] = queue.Queue(maxsize=256)
+        self.command_queue: queue.Queue[tuple[str, str] | None] = queue.Queue(
+            maxsize=64
+        )
         self.command_worker = threading.Thread(target=self._command_worker_loop, daemon=True)
         self.voice_worker: threading.Thread | None = None
         self.listening_lock = threading.Lock()
         self.started = False
-        self.session_lines: list[str] = []
+        self.session_lines: deque[str] = deque(maxlen=2_000)
         self.wake_active_until = 0.0
         self.command_worker_last_activity = time.monotonic()
         self.command_worker_last_error: str | None = None
@@ -404,9 +419,24 @@ class FlagshipRuntime:
             self.set_listening(True)
 
     def stop(self) -> None:
+        if self.stop_event.is_set():
+            return
         self.stop_event.set()
         self.listening_enabled = False
+        while True:
+            try:
+                self.command_queue.get_nowait()
+                self.command_queue.task_done()
+            except queue.Empty:
+                break
+        try:
+            self.command_queue.put_nowait(None)
+        except queue.Full:
+            logging.warning("Не удалось добавить сигнал остановки command worker.")
+        self._stop_voice_worker()
         self.tts.stop()
+        if self.command_worker.is_alive():
+            self.command_worker.join(timeout=5)
         self._save_session_history()
 
     def emit(
@@ -439,17 +469,41 @@ class FlagshipRuntime:
         )
 
     def _put_event(self, event: RuntimeEvent) -> None:
-        self.events.put(event)
+        try:
+            self.events.put_nowait(event)
+        except queue.Full:
+            if event.kind in {"progress", "status"}:
+                return
+            try:
+                self.events.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self.events.put_nowait(event)
+            except queue.Full:
+                logging.warning("Очередь GUI-событий заполнена.")
 
     def _known_secrets(self) -> list[str]:
         return self.assistant._known_secrets()
 
-    def submit_text(self, text: str, source: str = "manual") -> None:
+    def submit_text(self, text: str, source: str = "manual") -> bool:
         normalized = core.normalize_text(text)
-        if normalized:
-            if self._is_stop_speaking_command(normalized):
-                self.tts.interrupt()
-            self.command_queue.put((normalized, source))
+        if not normalized:
+            return False
+        if len(normalized) > 8_000:
+            self.emit("assistant", "Команда слишком длинная.")
+            return False
+        if self._is_stop_speaking_command(normalized):
+            self.tts.interrupt()
+        try:
+            self.command_queue.put_nowait((normalized, source))
+        except queue.Full:
+            self.emit(
+                "assistant",
+                "Очередь команд заполнена. Дождитесь выполнения предыдущих действий.",
+            )
+            return False
+        return True
 
     def _is_stop_speaking_command(self, text: str) -> bool:
         stop_phrases = (
@@ -670,14 +724,18 @@ class FlagshipRuntime:
                     self.submit_text(prepared, source="voice")
 
     def _command_worker_loop(self) -> None:
-        while not self.stop_event.is_set():
+        while True:
             try:
                 item = self.command_queue.get(timeout=0.2)
             except queue.Empty:
+                if self.stop_event.is_set():
+                    return
                 continue
 
             self.command_worker_last_activity = time.monotonic()
             try:
+                if item is None:
+                    return
                 text, source = item
                 self._process_command(text, source)
             except Exception:
@@ -697,6 +755,15 @@ class FlagshipRuntime:
             finally:
                 self.command_worker_last_activity = time.monotonic()
                 self.command_queue.task_done()
+
+    def _stop_voice_worker(self) -> None:
+        worker = self.voice_worker
+        if (
+            worker
+            and worker.is_alive()
+            and worker is not threading.current_thread()
+        ):
+            worker.join(timeout=5)
 
     def _process_command(self, text: str, source: str) -> None:
         if looks_sensitive(text):

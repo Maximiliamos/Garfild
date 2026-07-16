@@ -37,7 +37,7 @@ def test_emit_does_not_persist_by_default(tmp_path: Path) -> None:
 
     runtime.emit("user", "ordinary message")
 
-    assert runtime.session_lines == []
+    assert not runtime.session_lines
     event = runtime.drain_events()[0]
     assert event.text == "ordinary message"
     assert event.persist is True
