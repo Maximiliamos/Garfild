@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from garfield_actions import ActionDefinition, ActionResult
 from garfield_best import AssistantCore, HistoryPolicy
+from garfield_intents import RiskLevel
 
 from .conftest import FakeConfig, FakeLLM
 
@@ -57,12 +59,21 @@ def test_destructive_action_requires_full_confirmation(monkeypatch, tmp_path: Pa
     assistant = AssistantCore(config)
     calls = 0
 
-    def close_window() -> str:
+    def close_window() -> ActionResult:
         nonlocal calls
         calls += 1
-        return "Закрываю окно."
+        return ActionResult(True, "Закрываю окно.")
 
-    monkeypatch.setattr(assistant.desktop, "close_window", close_window)
+    monkeypatch.setitem(
+        assistant.actions._actions,
+        "window.close",
+        ActionDefinition(
+            "window.close",
+            "Закрытие окна",
+            close_window,
+            RiskLevel.DESTRUCTIVE,
+        ),
+    )
 
     prompt = assistant.handle("закрой окно")
     plain_yes = assistant.handle("да")

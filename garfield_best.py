@@ -24,6 +24,7 @@ from urllib.parse import quote_plus
 
 import requests
 
+from garfield_actions import ActionContext, create_default_registry
 from garfield_intents import (
     ActionRequest,
     Intent,
@@ -1817,6 +1818,13 @@ class AssistantCore:
         self.config = config
         self.history = ConversationHistory(config.remember_turns)
         self.desktop = DesktopController(config.allow_power_commands)
+        self.action_context = ActionContext(
+            platform_name=platform.system(),
+            desktop_enabled=config.enable_desktop_commands,
+            power_enabled=config.allow_power_commands,
+            metadata={"clipboard_writer": self.desktop._set_clipboard_text},
+        )
+        self.actions = create_default_registry(self.action_context)
         self.llm_client = create_llm_client(config)
         self.pending_action: PendingAction | None = None
         self.last_answer = ""
@@ -1907,18 +1915,17 @@ class AssistantCore:
                 )
 
         if intent.intent_id == "text.type":
-            disabled = self._desktop_unavailable()
-            if disabled:
-                return disabled
+            result = self.actions.execute(intent.intent_id, intent.arguments)
             return AssistantReply(
-                self.desktop.type_text(intent.arguments["text"]),
+                result.message,
                 sensitive=True,
                 action_id=intent.intent_id,
             )
 
         if intent.intent_id == "web.search":
+            result = self.actions.execute(intent.intent_id, intent.arguments)
             return AssistantReply(
-                self.desktop.search_web(intent.arguments["query"]),
+                result.message,
                 action_id=intent.intent_id,
             )
 
@@ -1981,22 +1988,18 @@ class AssistantCore:
         )
 
     def _execute_pending_action(self, request: ActionRequest) -> AssistantReply:
-        if request.action_id == "window.close":
-            disabled = self._desktop_unavailable()
-            return disabled or AssistantReply(self.desktop.close_window())
-        if request.action_id == "recycle_bin.empty":
-            disabled = self._desktop_unavailable()
-            return disabled or AssistantReply(self.desktop.empty_recycle_bin())
-
-        power_kinds = {
-            "system.shutdown": "shutdown",
-            "system.restart": "restart",
-            "system.sleep": "sleep",
-        }
-        kind = power_kinds.get(request.action_id)
-        if kind:
-            return AssistantReply(self.desktop.perform_power_action(kind))
-        return AssistantReply("Неизвестное подтверждённое действие.", should_speak=False)
+        try:
+            result = self.actions.execute(request.action_id, request.arguments)
+        except ValueError:
+            return AssistantReply(
+                "Неизвестное подтверждённое действие.",
+                should_speak=False,
+            )
+        return AssistantReply(
+            result.message,
+            should_speak=result.success,
+            action_id=request.action_id,
+        )
 
     def _power_action_label(self, kind: str) -> str:
         return {
