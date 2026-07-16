@@ -48,6 +48,9 @@ py-modules = [
 [tool.setuptools.packages.find]
 include = ["garfield*"]
 
+[tool.setuptools.package-data]
+"garfield.resources" = ["*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers --timeout=15"

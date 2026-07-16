@@ -10,5 +10,7 @@
 - Ограничены runtime-очереди, исправлены shutdown и lifecycle микрофона.
 - Добавлена валидация config, путей и LLM endpoint.
 - Ядро и runtime перенесены в пакет `garfield` с compatibility-адаптерами.
+- Все legacy desktop-команды переведены на Action Registry; риск берётся только из registry.
+- В wheel включены JSON Schema для конфигурации и skills v2.
 
 Это preview-релиз, не 1.0.

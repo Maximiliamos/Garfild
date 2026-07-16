@@ -12,6 +12,7 @@ from .desktop import (
     search_web,
     type_text,
 )
+from .legacy_desktop import invoke_controller_action
 from .models import ActionContext, ActionDefinition, ActionResult
 from .system import empty_recycle_bin, execute_power_action
 
@@ -36,11 +37,19 @@ class ActionRegistry:
         action_id: str,
         arguments: dict[str, object],
     ) -> ActionResult:
+        definition = self.validate(action_id, arguments)
+        return definition.handler(**arguments)
+
+    def validate(
+        self,
+        action_id: str,
+        arguments: dict[str, object],
+    ) -> ActionDefinition:
         definition = self.get(action_id)
         unknown = set(arguments) - set(definition.allowed_arguments)
         if unknown:
             raise ValueError(f"Недопустимые аргументы для {action_id}: {sorted(unknown)}")
-        return definition.handler(**arguments)
+        return definition
 
 
 def create_default_registry(context: ActionContext) -> ActionRegistry:
@@ -105,6 +114,37 @@ def create_default_registry(context: ActionContext) -> ActionRegistry:
             RiskLevel.DESTRUCTIVE,
         ),
     ]
+    legacy_definitions = (
+        ("text.shortcut", "Текстовая команда", "text_hotkey", RiskLevel.VISIBLE, {"action"}),
+        ("text.navigate", "Навигация по тексту", "navigate_text", RiskLevel.VISIBLE, {"action"}),
+        ("input_language.switch", "Смена языка ввода", "switch_input_language", RiskLevel.VISIBLE, set()),
+        ("browser.shortcut", "Команда браузера", "browser_hotkey", RiskLevel.VISIBLE, {"action"}),
+        ("image.search", "Поиск изображений", "open_image_search", RiskLevel.VISIBLE, {"query"}),
+        ("window.minimize_all", "Сворачивание окон", "minimize_windows", RiskLevel.VISIBLE, set()),
+        ("window.minimize", "Сворачивание окна", "minimize_current_window", RiskLevel.VISIBLE, set()),
+        ("window.maximize", "Разворачивание окна", "maximize_window", RiskLevel.VISIBLE, set()),
+        ("window.switch", "Переключение окна", "switch_window", RiskLevel.VISIBLE, set()),
+        ("mouse.click", "Щелчок мышью", "mouse_click", RiskLevel.VISIBLE, {"button"}),
+        ("mouse.double_click", "Двойной щелчок мышью", "mouse_double_click", RiskLevel.VISIBLE, set()),
+        ("mouse.move", "Перемещение мыши", "move_mouse", RiskLevel.VISIBLE, {"direction"}),
+        ("mouse.scroll", "Прокрутка", "scroll", RiskLevel.VISIBLE, {"direction"}),
+        ("volume.set", "Изменение громкости", "set_volume_percent", RiskLevel.VISIBLE, {"percent"}),
+        ("volume.mute", "Отключение звука", "volume_mute", RiskLevel.VISIBLE, set()),
+        ("volume.step", "Изменение громкости", "volume_step", RiskLevel.VISIBLE, {"direction", "presses"}),
+        ("brightness.set", "Изменение яркости", "set_brightness_percent", RiskLevel.VISIBLE, {"percent"}),
+        ("screen.lock", "Блокировка экрана", "lock_screen", RiskLevel.SYSTEM, set()),
+        ("system.cancel_power_timer", "Отмена таймера питания", "cancel_power_timer", RiskLevel.VISIBLE, set()),
+    )
+    for action_id, label, method_name, risk, arguments in legacy_definitions:
+        definitions.append(
+            ActionDefinition(
+                action_id,
+                label,
+                partial(invoke_controller_action, context, method_name=method_name),
+                risk,
+                frozenset(arguments),
+            )
+        )
     for kind, action_id, label in (
         ("shutdown", "system.shutdown", "Выключение компьютера"),
         ("restart", "system.restart", "Перезагрузка компьютера"),

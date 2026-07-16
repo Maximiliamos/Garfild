@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://garfild.local/schemas/config.schema.json",
+  "title": "Garfild configuration",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "enable_desktop_commands": {
+      "type": "boolean"
+    },
+    "allow_power_commands": {
+      "type": "boolean"
+    },
+    "allow_custom_llm_endpoint": {
+      "type": "boolean"
+    },
+    "persist_session_history": {
+      "type": "boolean"
+    },
+    "llm_provider": {
+      "enum": ["nvidia", "openai", "gemini", "groq", "xai"]
+    },
+    "llm_api_url": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://"
+    },
+    "skills_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "vosk_model_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "piper_model_path": {
+      "type": "string"
+    },
+    "piper_config_path": {
+      "type": "string"
+    }
+  }
+}

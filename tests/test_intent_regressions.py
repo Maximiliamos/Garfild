@@ -4,7 +4,7 @@ from pathlib import Path
 
 from garfield_actions import ActionDefinition, ActionResult
 from garfield_best import AssistantCore, HistoryPolicy
-from garfield_intents import RiskLevel
+from garfield_intents import Intent, RiskLevel
 
 from .conftest import FakeConfig, FakeLLM
 
@@ -97,6 +97,73 @@ def test_cancellation_clears_pending_action(tmp_path: Path) -> None:
     reply = assistant.handle("нет")
 
     assert reply is not None and reply.text == "Команда отменена."
+    assert assistant.pending_action is None
+
+
+def test_unrelated_command_cancels_pending_destructive_action(tmp_path: Path) -> None:
+    assistant = AssistantCore(
+        FakeConfig(
+            skills_path=str(tmp_path / "skills.json"),
+            enable_desktop_commands=True,
+        )
+    )
+
+    assistant.handle("закрой окно")
+    reply = assistant.handle("открой браузер")
+
+    assert reply is not None
+    assert reply.action_id == "web.open"
+    assert assistant.pending_action is None
+
+
+def test_builtin_desktop_command_executes_through_registry(monkeypatch, tmp_path: Path) -> None:
+    assistant = AssistantCore(
+        FakeConfig(
+            skills_path=str(tmp_path / "skills.json"),
+            enable_desktop_commands=True,
+        )
+    )
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def execute(action_id: str, arguments: dict[str, object]) -> ActionResult:
+        calls.append((action_id, arguments))
+        return ActionResult(True, "ok")
+
+    monkeypatch.setattr(assistant.actions, "execute", execute)
+
+    reply = assistant.handle("сделай громче")
+
+    assert reply is not None and reply.text == "ok"
+    assert calls == [("volume.step", {"direction": "up"})]
+
+
+def test_registry_risk_overrides_intent_risk(monkeypatch, tmp_path: Path) -> None:
+    assistant = AssistantCore(
+        FakeConfig(
+            skills_path=str(tmp_path / "skills.json"),
+            enable_desktop_commands=True,
+        )
+    )
+    monkeypatch.setitem(
+        assistant.actions._actions,
+        "window.close",
+        ActionDefinition(
+            "window.close",
+            "Закрытие окна",
+            lambda: ActionResult(True, "closed"),
+            RiskLevel.SAFE,
+        ),
+    )
+
+    reply = assistant._handle_intent(
+        Intent(
+            "window.close",
+            risk=RiskLevel.SYSTEM,
+            original_text="закрой окно",
+        )
+    )
+
+    assert reply.text == "closed"
     assert assistant.pending_action is None
 
 

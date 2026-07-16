@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://garfild.local/schemas/skills-v2.schema.json",
+  "title": "Garfild Skills v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "skills"],
+  "properties": {
+    "version": {
+      "const": 2
+    },
+    "skills": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "phrases", "action_id"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "phrases": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "action_id": {
+            "enum": [
+              "assistant.say",
+              "web.open",
+              "web.search",
+              "application.open",
+              "project_file.open"
+            ]
+          },
+          "arguments": {
+            "type": "object"
+          }
+        }
+      }
+    }
+  }
+}

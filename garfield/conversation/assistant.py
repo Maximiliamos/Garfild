@@ -12,7 +12,6 @@ import sys
 import tempfile
 import threading
 import time
-import webbrowser
 import wave
 from collections import OrderedDict
 from contextlib import suppress
@@ -22,11 +21,12 @@ from enum import Enum
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import urlparse
 
 import requests
 
 from garfield_actions import ActionContext, create_default_registry
+from garfield_actions.legacy_desktop import DesktopController
 from garfield_config import clamp_int, load_json_config, resolve_config_path
 from garfield_intents import (
     ActionRequest,
@@ -60,11 +60,6 @@ from garfield_privacy import (
 )
 from garfield_secrets import PROVIDERS, SecretStore, migrate_plaintext_secrets
 from garfield_skills import SkillRegistry as SafeSkillRegistry
-
-try:
-    import pyautogui
-except ImportError:
-    pyautogui = None
 
 try:
     import pyttsx3
@@ -343,23 +338,6 @@ class AudioDevice:
     is_default_output: bool = False
 
 
-@dataclass
-class LocalSkill:
-    skill_id: str
-    phrases: list[str]
-    action: str
-    target: str = ""
-    response: str = ""
-    arguments: list[str] = field(default_factory=list)
-    use_shell: bool = False
-
-
-@dataclass
-class SkillMatch:
-    skill: LocalSkill
-    variables: dict[str, str]
-
-
 class ConversationHistory:
     def __init__(self, max_turns: int) -> None:
         self.max_turns = max_turns
@@ -376,125 +354,6 @@ class ConversationHistory:
             messages.append({"role": "user", "content": user_text})
             messages.append({"role": "assistant", "content": assistant_text})
         return messages
-
-
-class SkillRegistry:
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self.skills: list[LocalSkill] = []
-        self.load_error: str | None = None
-        self.reload()
-
-    def reload(self) -> tuple[int, str | None]:
-        self.skills = []
-        self.load_error = None
-        if not self.path.exists():
-            return 0, None
-
-        try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
-            items = payload.get("skills", payload) if isinstance(payload, dict) else payload
-            if not isinstance(items, list):
-                raise ValueError("Корневой элемент skills должен быть списком.")
-
-            for index, raw_skill in enumerate(items, start=1):
-                if not isinstance(raw_skill, dict):
-                    continue
-                phrases = raw_skill.get("phrases", [])
-                if isinstance(phrases, str):
-                    phrases = [phrases]
-                normalized_phrases = [normalize_text(item) for item in phrases if normalize_text(str(item))]
-                action = str(raw_skill.get("action", "")).strip().lower()
-                if not normalized_phrases or not action:
-                    continue
-                arguments = raw_skill.get("arguments", [])
-                if isinstance(arguments, str):
-                    arguments = [arguments]
-                self.skills.append(
-                    LocalSkill(
-                        skill_id=str(raw_skill.get("id") or f"skill_{index}"),
-                        phrases=normalized_phrases,
-                        action=action,
-                        target=str(raw_skill.get("target", "") or ""),
-                        response=str(raw_skill.get("response", "") or ""),
-                        arguments=[str(argument) for argument in arguments],
-                        use_shell=bool(raw_skill.get("use_shell", False)),
-                    )
-                )
-        except Exception as error:
-            self.load_error = str(error)
-        return len(self.skills), self.load_error
-
-    def count(self) -> int:
-        return len(self.skills)
-
-    def describe(self) -> str:
-        if self.load_error:
-            return f"Ошибка загрузки навыков: {self.load_error}"
-        if not self.skills:
-            return "Навыки не загружены."
-        labels = ", ".join(skill.skill_id for skill in self.skills[:8])
-        suffix = "" if len(self.skills) <= 8 else f" и еще {len(self.skills) - 8}"
-        return f"Навыки: {labels}{suffix}."
-
-    def match(self, text: str) -> SkillMatch | None:
-        normalized = normalize_text(text)
-        for skill in self.skills:
-            for phrase in skill.phrases:
-                if "{query}" in phrase:
-                    prefix, _, suffix = phrase.partition("{query}")
-                    if prefix and not normalized.startswith(prefix):
-                        continue
-                    if suffix and not normalized.endswith(suffix):
-                        continue
-                    query = normalized[len(prefix) :]
-                    if suffix:
-                        query = query[: -len(suffix)]
-                    query = query.strip(" ,.!?-")
-                    if query:
-                        return SkillMatch(skill, {"query": query, "query_url": quote_plus(query)})
-                elif normalized == phrase:
-                    return SkillMatch(skill, {"query": "", "query_url": ""})
-        return None
-
-    def execute(self, match: SkillMatch) -> str:
-        skill = match.skill
-        variables = dict(match.variables)
-        variables.setdefault("query", "")
-        variables.setdefault("query_url", "")
-        target = skill.target.format(**variables) if skill.target else ""
-        response = skill.response.format(**variables) if skill.response else ""
-        arguments = [argument.format(**variables) for argument in skill.arguments]
-
-        if skill.action == "say":
-            return response or "Навык выполнен."
-
-        if skill.action == "open_url":
-            webbrowser.open(target)
-            return response or f"Открываю {target}."
-
-        if skill.action == "search_web":
-            query = variables["query"] or target
-            webbrowser.open(f"https://www.google.com/search?q={quote_plus(query)}")
-            return response or f"Ищу в интернете: {query}."
-
-        if skill.action == "open_path":
-            path = self._resolve_path(target)
-            if not path.exists():
-                raise FileNotFoundError(f"Путь не найден: {path}")
-            os.startfile(str(path))
-            return response or f"Открываю {path.name}."
-
-        if skill.action in {"run", "python", "hotkey"}:
-            raise ValueError("Небезопасный тип навыка запрещён.")
-
-        raise ValueError(f"Неизвестный тип навыка: {skill.action}")
-
-    def _resolve_path(self, raw_path: str) -> Path:
-        candidate = Path(raw_path)
-        if candidate.is_absolute():
-            return candidate
-        return (self.path.parent / candidate).resolve()
 
 
 def resolve_default_vosk_path() -> Path:
@@ -1589,362 +1448,6 @@ class NVIDIAClient(LLMClient):
         )
 
 
-class DesktopController:
-    def __init__(self, allow_power_commands: bool) -> None:
-        self.allow_power_commands = allow_power_commands
-
-    def _require_pyautogui(self) -> str | None:
-        if pyautogui is None:
-            return "Команда недоступна, потому что не установлен pyautogui."
-        return None
-
-    def _hotkey(self, *keys: str) -> str | None:
-        error = self._require_pyautogui()
-        if error:
-            return error
-        pyautogui.hotkey(*keys)
-        return None
-
-    def _press(self, key: str, presses: int = 1) -> str | None:
-        error = self._require_pyautogui()
-        if error:
-            return error
-        pyautogui.press(key, presses=presses, interval=0.03)
-        return None
-
-    def _set_clipboard_text(self, text: str) -> None:
-        if platform.system() == "Windows":
-            subprocess.run(
-                [
-                    "powershell",
-                    "-NoProfile",
-                    "-Command",
-                    "param([string]$Text) Set-Clipboard -Value $Text",
-                    text,
-                ],
-                check=True,
-                capture_output=True,
-                timeout=10,
-            )
-            return
-
-        try:
-            import tkinter as tk
-        except ImportError as error:
-            raise RuntimeError("Буфер обмена недоступен: нет tkinter.") from error
-
-        root = tk.Tk()
-        root.withdraw()
-        try:
-            root.clipboard_clear()
-            root.clipboard_append(text)
-            root.update()
-        finally:
-            root.destroy()
-
-    def open_browser(self) -> str:
-        webbrowser.open("https://www.google.com")
-        return "Открываю браузер."
-
-    def search_web(self, query: str) -> str:
-        webbrowser.open(f"https://www.google.com/search?q={quote_plus(query)}")
-        return f"Ищу в интернете: {query}."
-
-    def open_youtube(self) -> str:
-        webbrowser.open("https://www.youtube.com")
-        return "Открываю YouTube."
-
-    def open_site(self, label: str, url: str) -> str:
-        webbrowser.open(url)
-        return f"Открываю {label}."
-
-    def browser_hotkey(self, action: str) -> str:
-        shortcuts = {
-            "new_tab": (("ctrl", "t"), "Открываю новую вкладку."),
-            "close_tab": (("ctrl", "w"), "Закрываю вкладку."),
-            "restore_tab": (("ctrl", "shift", "t"), "Возвращаю закрытую вкладку."),
-            "next_tab": (("ctrl", "tab"), "Перехожу на следующую вкладку."),
-            "previous_tab": (("ctrl", "shift", "tab"), "Перехожу на предыдущую вкладку."),
-            "refresh": (("ctrl", "r"), "Обновляю страницу."),
-            "downloads": (("ctrl", "j"), "Открываю загрузки."),
-            "history": (("ctrl", "h"), "Открываю историю браузера."),
-            "bookmarks": (("ctrl", "shift", "o"), "Открываю закладки."),
-            "add_bookmark": (("ctrl", "d"), "Добавляю страницу в закладки."),
-            "find_page": (("ctrl", "f"), "Открываю поиск по странице."),
-            "address_bar": (("ctrl", "l"), "Перехожу в адресную строку."),
-            "clear_history": (("ctrl", "shift", "delete"), "Открываю очистку истории браузера."),
-        }
-        if action not in shortcuts:
-            return "Неизвестное действие браузера."
-        keys, message = shortcuts[action]
-        error = self._hotkey(*keys)
-        return error or message
-
-    def open_image_search(self, query: str) -> str:
-        webbrowser.open(f"https://www.google.com/search?tbm=isch&q={quote_plus(query)}")
-        return f"Ищу изображения: {query}."
-
-    def minimize_windows(self) -> str:
-        error = self._require_pyautogui()
-        if error:
-            return error
-
-        if platform.system() == "Windows":
-            pyautogui.hotkey("win", "d")
-        elif platform.system() == "Darwin":
-            pyautogui.hotkey("command", "option", "h")
-        else:
-            pyautogui.hotkey("win", "d")
-
-        return "Сворачиваю окна."
-
-    def minimize_current_window(self) -> str:
-        error = self._require_pyautogui()
-        if error:
-            return error
-
-        if platform.system() == "Darwin":
-            pyautogui.hotkey("command", "m")
-        else:
-            pyautogui.hotkey("win", "down")
-        return "Сворачиваю текущее окно."
-
-    def maximize_window(self) -> str:
-        error = self._require_pyautogui()
-        if error:
-            return error
-
-        if platform.system() == "Darwin":
-            pyautogui.hotkey("ctrl", "command", "f")
-        else:
-            pyautogui.hotkey("win", "up")
-        return "Разворачиваю окно."
-
-    def switch_window(self) -> str:
-        error = self._require_pyautogui()
-        if error:
-            return error
-
-        if platform.system() == "Darwin":
-            pyautogui.hotkey("command", "tab")
-        else:
-            pyautogui.hotkey("alt", "tab")
-        return "Переключаю окно."
-
-    def close_window(self) -> str:
-        error = self._require_pyautogui()
-        if error:
-            return error
-
-        if platform.system() == "Darwin":
-            pyautogui.hotkey("command", "q")
-        else:
-            pyautogui.hotkey("alt", "f4")
-
-        return "Закрываю текущее окно."
-
-    def mouse_click(self, button: str = "left") -> str:
-        error = self._require_pyautogui()
-        if error:
-            return error
-        pyautogui.click(button=button)
-        return "Кликаю правой кнопкой." if button == "right" else "Кликаю левой кнопкой."
-
-    def mouse_double_click(self) -> str:
-        error = self._require_pyautogui()
-        if error:
-            return error
-        pyautogui.doubleClick()
-        return "Двойной клик."
-
-    def move_mouse(self, direction: str, amount: int = 80) -> str:
-        error = self._require_pyautogui()
-        if error:
-            return error
-        offsets = {
-            "left": (-amount, 0, "Перемещаю курсор влево."),
-            "right": (amount, 0, "Перемещаю курсор вправо."),
-            "up": (0, -amount, "Перемещаю курсор вверх."),
-            "down": (0, amount, "Перемещаю курсор вниз."),
-        }
-        if direction not in offsets:
-            return "Неизвестное направление курсора."
-        x, y, message = offsets[direction]
-        pyautogui.moveRel(x, y, duration=0.12)
-        return message
-
-    def scroll(self, direction: str, amount: int = 5) -> str:
-        error = self._require_pyautogui()
-        if error:
-            return error
-        clicks = amount if direction == "up" else -amount
-        pyautogui.scroll(clicks)
-        return "Прокручиваю вверх." if direction == "up" else "Прокручиваю вниз."
-
-    def text_hotkey(self, action: str) -> str:
-        shortcuts = {
-            "copy": (("ctrl", "c"), "Копирую текст."),
-            "cut": (("ctrl", "x"), "Вырезаю текст."),
-            "paste": (("ctrl", "v"), "Вставляю текст."),
-            "select_all": (("ctrl", "a"), "Выделяю весь текст."),
-            "delete_all": (("ctrl", "a"), "Удаляю весь текст.", "backspace"),
-            "delete_last_word": (("ctrl", "backspace"), "Удаляю последнее слово."),
-            "send": (("enter",), "Отправляю."),
-            "undo": (("ctrl", "z"), "Отменяю последнее действие."),
-            "save_as": (("ctrl", "shift", "s"), "Открываю сохранение как."),
-            "align_left": (("ctrl", "l"), "Выравниваю по левому краю."),
-            "align_center": (("ctrl", "e"), "Выравниваю по центру."),
-            "align_right": (("ctrl", "r"), "Выравниваю по правому краю."),
-            "align_justify": (("ctrl", "j"), "Выравниваю по ширине."),
-        }
-        if action not in shortcuts:
-            return "Неизвестное действие текста."
-        payload = shortcuts[action]
-        keys = payload[0]
-        message = payload[1]
-        error = self._hotkey(*keys)
-        if error:
-            return error
-        if len(payload) > 2:
-            pyautogui.press(payload[2])
-        return message
-
-    def navigate_text(self, action: str) -> str:
-        shortcuts = {
-            "line_start": (("home",), "Перехожу в начало строки."),
-            "line_end": (("end",), "Перехожу в конец строки."),
-            "document_start": (("ctrl", "home"), "Перехожу в начало документа."),
-            "document_end": (("ctrl", "end"), "Перехожу в конец документа."),
-            "up": (("up",), "Перемещаю курсор вверх."),
-            "down": (("down",), "Перемещаю курсор вниз."),
-            "left": (("left",), "Перемещаю курсор влево."),
-            "right": (("right",), "Перемещаю курсор вправо."),
-        }
-        if action not in shortcuts:
-            return "Неизвестная навигационная команда."
-        keys, message = shortcuts[action]
-        if len(keys) == 1:
-            error = self._press(keys[0])
-        else:
-            error = self._hotkey(*keys)
-        return error or message
-
-    def type_text(self, text: str) -> str:
-        error = self._require_pyautogui()
-        if error:
-            return error
-        if not text:
-            return "Не услышал текст для ввода."
-        self._set_clipboard_text(text)
-        pyautogui.hotkey("ctrl", "v")
-        return f"Ввожу текст: {text}."
-
-    def switch_input_language(self) -> str:
-        error = self._require_pyautogui()
-        if error:
-            return error
-        if platform.system() == "Windows":
-            pyautogui.hotkey("alt", "shift")
-        elif platform.system() == "Darwin":
-            pyautogui.hotkey("control", "space")
-        else:
-            pyautogui.hotkey("alt", "shift")
-        return "Меняю язык ввода."
-
-    def volume_mute(self) -> str:
-        error = self._press("volumemute")
-        return error or "Переключаю режим без звука."
-
-    def volume_step(self, direction: str, presses: int = 5) -> str:
-        key = "volumeup" if direction == "up" else "volumedown"
-        error = self._press(key, presses=presses)
-        return error or ("Увеличиваю громкость." if direction == "up" else "Уменьшаю громкость.")
-
-    def set_volume_percent(self, percent: int) -> str:
-        percent = max(0, min(int(percent), 100))
-        error = self._require_pyautogui()
-        if error:
-            return error
-        pyautogui.press("volumedown", presses=50, interval=0.01)
-        if percent > 0:
-            pyautogui.press("volumeup", presses=max(1, round(percent / 2)), interval=0.01)
-        return f"Ставлю громкость примерно на {percent}%."
-
-    def set_brightness_percent(self, percent: int) -> str:
-        percent = max(0, min(int(percent), 100))
-        if platform.system() != "Windows":
-            return "Управление яркостью сейчас доступно только на Windows."
-        command = (
-            f"$Brightness = {percent}; "
-            "(Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightnessMethods) "
-            "| ForEach-Object { $_.WmiSetBrightness(1, $Brightness) }"
-        )
-        subprocess.run(
-            ["powershell", "-NoProfile", "-Command", command],
-            check=False,
-            capture_output=True,
-            timeout=10,
-        )
-        return f"Ставлю яркость на {percent}%."
-
-    def empty_recycle_bin(self) -> str:
-        if platform.system() != "Windows":
-            return "Очистка корзины поддерживается только на Windows."
-        subprocess.run(
-            ["powershell", "-NoProfile", "-Command", "Clear-RecycleBin -Force -ErrorAction SilentlyContinue"],
-            check=False,
-            capture_output=True,
-            timeout=20,
-        )
-        return "Корзина очищена."
-
-    def lock_screen(self) -> str:
-        if platform.system() == "Windows":
-            subprocess.Popen(["rundll32.exe", "user32.dll,LockWorkStation"])
-            return "Блокирую экран."
-        error = self._hotkey("ctrl", "command", "q") if platform.system() == "Darwin" else self._hotkey("ctrl", "alt", "l")
-        return error or "Блокирую экран."
-
-    def cancel_power_timer(self) -> str:
-        if platform.system() == "Windows":
-            os.system("shutdown /a")
-            return "Отменяю запланированное выключение или перезагрузку."
-        return "Отмена таймера питания поддерживается только на Windows."
-
-    def perform_power_action(self, kind: str) -> str:
-        if not self.allow_power_commands:
-            return "Силовые команды отключены в конфиге ради безопасности."
-
-        if kind == "shutdown":
-            if platform.system() == "Windows":
-                os.system("shutdown /s /t 15")
-            elif platform.system() == "Darwin":
-                os.system("sudo shutdown -h +1")
-            else:
-                os.system("shutdown -h +1")
-            return "Подтверждение принято. Компьютер будет выключен через короткое время."
-
-        if kind == "restart":
-            if platform.system() == "Windows":
-                os.system("shutdown /r /t 15")
-            elif platform.system() == "Darwin":
-                os.system("sudo shutdown -r +1")
-            else:
-                os.system("shutdown -r +1")
-            return "Подтверждение принято. Компьютер будет перезагружен через короткое время."
-
-        if kind == "sleep":
-            if platform.system() == "Windows":
-                subprocess.Popen(["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"])
-            elif platform.system() == "Darwin":
-                os.system("pmset sleepnow")
-            else:
-                os.system("systemctl suspend")
-            return "Подтверждение принято. Перевожу компьютер в спящий режим."
-
-        return "Неизвестное действие питания."
-
-
 COMMAND_CATALOG: list[tuple[str, list[str]]] = [
     (
         "Голос и режимы",
@@ -2036,6 +1539,7 @@ class AssistantCore:
             power_enabled=config.allow_power_commands,
             metadata={
                 "clipboard_writer": self.desktop._set_clipboard_text,
+                "desktop_controller": self.desktop,
                 "project_root": BASE_DIR,
             },
         )
@@ -2103,52 +1607,46 @@ class AssistantCore:
         )
 
     def _handle_intent(self, intent: Intent) -> AssistantReply:
-        display_names = {
-            "window.close": "закрытие окна",
-            "recycle_bin.empty": "очистка корзины",
-            "system.shutdown": "выключение компьютера",
-            "system.restart": "перезагрузка компьютера",
-            "system.sleep": "переход компьютера в спящий режим",
-        }
-        if intent.risk >= RiskLevel.DESTRUCTIVE:
-            request = ActionRequest(
-                action_id=intent.intent_id,
-                arguments=dict(intent.arguments),
-                risk=intent.risk,
-                display_name=display_names.get(intent.intent_id, intent.intent_id),
-            )
-            if intent.risk is RiskLevel.SYSTEM and not self.config.allow_power_commands:
-                return AssistantReply(
-                    "Силовые команды сейчас отключены в конфиге ради безопасности."
-                )
-            if requires_confirmation(request):
-                token = confirmation_token(request.action_id)
-                self.pending_action = PendingAction(
-                    request=request,
-                    created_at=time.monotonic(),
-                    confirmation_token=token,
-                )
-                return AssistantReply(
-                    f"Подтвердите действие: {token}.",
-                    action_id=intent.intent_id,
-                )
+        return self._execute_registered_action(intent.intent_id, intent.arguments)
 
-        if intent.intent_id == "text.type":
-            result = self.actions.execute(intent.intent_id, intent.arguments)
+    def _execute_registered_action(
+        self,
+        action_id: str,
+        arguments: dict[str, object] | None = None,
+    ) -> AssistantReply:
+        arguments = dict(arguments or {})
+        try:
+            definition = self.actions.validate(action_id, arguments)
+        except ValueError:
+            return AssistantReply("Команда пока не поддерживается.", should_speak=False)
+
+        request = ActionRequest(
+            action_id=action_id,
+            arguments=arguments,
+            risk=definition.risk,
+            display_name=definition.display_name,
+        )
+        if definition.risk is RiskLevel.SYSTEM and not self.config.allow_power_commands:
+            return AssistantReply("Системные команды сейчас отключены в конфигурации.")
+        if requires_confirmation(request):
+            token = confirmation_token(action_id)
+            self.pending_action = PendingAction(
+                request=request,
+                created_at=time.monotonic(),
+                confirmation_token=token,
+            )
             return AssistantReply(
-                result.message,
-                sensitive=True,
-                action_id=intent.intent_id,
+                f"Подтвердите действие: {token}.",
+                action_id=action_id,
             )
 
-        if intent.intent_id == "web.search":
-            result = self.actions.execute(intent.intent_id, intent.arguments)
-            return AssistantReply(
-                result.message,
-                action_id=intent.intent_id,
-            )
-
-        return AssistantReply("Команда пока не поддерживается.", should_speak=False)
+        result = self.actions.execute(action_id, arguments)
+        return AssistantReply(
+            result.message,
+            should_speak=result.success,
+            sensitive=bool(definition.sensitive_arguments),
+            action_id=action_id,
+        )
 
     def _remember_reply(self, user_text: str, reply: AssistantReply) -> None:
         if not reply.text or reply.history_policy is HistoryPolicy.EXCLUDE:
@@ -2204,12 +1702,16 @@ class AssistantCore:
             self.pending_action = None
             return self._execute_pending_action(pending.request)
 
-        return AssistantReply(
-            (
-                f"Для подтверждения скажите «{confirm_phrases[-1]} "
-                f"{pending.confirmation_token}» или «{cancel_phrases[0]}»."
+        if normalize_text(text) in {normalize_text(phrase) for phrase in confirm_phrases}:
+            return AssistantReply(
+                (
+                    f"Для подтверждения скажите «{confirm_phrases[-1]} "
+                    f"{pending.confirmation_token}» или «{cancel_phrases[0]}»."
+                )
             )
-        )
+
+        self.pending_action = None
+        return None
 
     def _execute_pending_action(self, request: ActionRequest) -> AssistantReply:
         try:
@@ -2284,61 +1786,61 @@ class AssistantCore:
                 return disabled
             for prefix in ("напечатай ", "введи текст ", "набери текст "):
                 if text.startswith(prefix):
-                    return AssistantReply(self.desktop.type_text(text.removeprefix(prefix).strip()))
+                    return self._execute_registered_action("text.type", {"text": text.removeprefix(prefix).strip()})
 
         if contains_any(text, ("копируй", "копировать", "скопируй текст")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return AssistantReply(self.desktop.text_hotkey("copy"))
+            return self._execute_registered_action("text.shortcut", {"action": "copy"})
 
         if contains_any(text, ("вырежи", "вырезать")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return AssistantReply(self.desktop.text_hotkey("cut"))
+            return self._execute_registered_action("text.shortcut", {"action": "cut"})
 
         if contains_any(text, ("вставь", "вставить")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return AssistantReply(self.desktop.text_hotkey("paste"))
+            return self._execute_registered_action("text.shortcut", {"action": "paste"})
 
         if contains_any(text, ("выдели всё", "выдели все", "выделить всё", "выделить все")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return AssistantReply(self.desktop.text_hotkey("select_all"))
+            return self._execute_registered_action("text.shortcut", {"action": "select_all"})
 
         if contains_any(text, ("удали последнее слово", "стереть последнее слово")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return AssistantReply(self.desktop.text_hotkey("delete_last_word"))
+            return self._execute_registered_action("text.shortcut", {"action": "delete_last_word"})
 
         if contains_any(text, ("удали весь текст", "очисти текст", "стереть весь текст")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return AssistantReply(self.desktop.text_hotkey("delete_all"))
+            return self._execute_registered_action("text.shortcut", {"action": "delete_all"})
 
         if contains_any(text, ("отправь сообщение", "отправить сообщение", "нажми enter", "нажми энтер")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return AssistantReply(self.desktop.text_hotkey("send"))
+            return self._execute_registered_action("text.shortcut", {"action": "send"})
 
         if contains_any(text, ("отмени действие", "отмена последнего действия", "undo")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return AssistantReply(self.desktop.text_hotkey("undo"))
+            return self._execute_registered_action("text.shortcut", {"action": "undo"})
 
         if contains_any(text, ("сохрани как", "сохранить как")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return AssistantReply(self.desktop.text_hotkey("save_as"))
+            return self._execute_registered_action("text.shortcut", {"action": "save_as"})
 
         text_navigation = {
             ("в начало документа", "перейди в начало документа", "в самое начало"): "document_start",
@@ -2355,7 +1857,7 @@ class AssistantCore:
                 disabled = self._desktop_unavailable()
                 if disabled:
                     return disabled
-                return AssistantReply(self.desktop.navigate_text(action))
+                return self._execute_registered_action("text.navigate", {"action": action})
 
         alignment_commands = {
             ("по левому краю", "выравнивание влево"): "align_left",
@@ -2368,19 +1870,19 @@ class AssistantCore:
                 disabled = self._desktop_unavailable()
                 if disabled:
                     return disabled
-                return AssistantReply(self.desktop.text_hotkey(action))
+                return self._execute_registered_action("text.shortcut", {"action": action})
 
         if contains_any(text, ("смени язык", "переключи язык", "смена языка ввода")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return AssistantReply(self.desktop.switch_input_language())
+            return self._execute_registered_action("input_language.switch")
 
         if contains_any(text, ("открой браузер", "открой хром", "запусти браузер")):
-            return AssistantReply(self.desktop.open_browser())
+            return self._execute_registered_action("web.open", {"url": "https://www.google.com"})
 
         if contains_any(text, ("открой ютуб", "открой youtube", "запусти ютуб")):
-            return AssistantReply(self.desktop.open_youtube())
+            return self._execute_registered_action("web.open", {"url": "https://www.youtube.com"})
 
         site_commands = {
             ("открой вк", "открой вконтакте", "запусти вк"): ("ВКонтакте", "https://vk.com"),
@@ -2388,9 +1890,9 @@ class AssistantCore:
             ("открой netflix", "открой нетфликс"): ("Netflix", "https://www.netflix.com"),
             ("открой telegram", "открой телеграм"): ("Telegram Web", "https://web.telegram.org"),
         }
-        for phrases, (label, url) in site_commands.items():
+        for phrases, (_label, url) in site_commands.items():
             if contains_any(text, phrases):
-                return AssistantReply(self.desktop.open_site(label, url))
+                return self._execute_registered_action("web.open", {"url": url})
 
         browser_commands = {
             ("новая вкладка", "открой вкладку", "создай вкладку"): "new_tab",
@@ -2412,44 +1914,44 @@ class AssistantCore:
                 disabled = self._desktop_unavailable()
                 if disabled:
                     return disabled
-                return AssistantReply(self.desktop.browser_hotkey(action))
+                return self._execute_registered_action("browser.shortcut", {"action": action})
 
         if text.startswith(("найди картинки ", "поиск картинок ", "найди изображения ")):
             for prefix in ("найди картинки ", "поиск картинок ", "найди изображения "):
                 if text.startswith(prefix):
                     query = text.removeprefix(prefix).strip()
                     if query:
-                        return AssistantReply(self.desktop.open_image_search(query))
+                        return self._execute_registered_action("image.search", {"query": query})
 
         if contains_any(text, ("сверни все окна", "свернуть все окна")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return AssistantReply(self.desktop.minimize_windows())
+            return self._execute_registered_action("window.minimize_all")
 
         if contains_any(text, ("сверни окно", "свернуть окно", "сверни текущее окно")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return AssistantReply(self.desktop.minimize_current_window())
+            return self._execute_registered_action("window.minimize")
 
         if contains_any(text, ("разверни окно", "развернуть окно", "восстанови окно")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return AssistantReply(self.desktop.maximize_window())
+            return self._execute_registered_action("window.maximize")
 
         if contains_any(text, ("переключи окно", "следующее окно", "другое окно")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return AssistantReply(self.desktop.switch_window())
+            return self._execute_registered_action("window.switch")
 
         if contains_any(text, ("закрой окно", "закрой приложение")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return AssistantReply(self.desktop.close_window())
+            return self._execute_registered_action("window.close")
 
         mouse_commands = {
             ("левый клик", "кликни", "нажми левую кнопку мыши"): ("click", "left"),
@@ -2468,13 +1970,13 @@ class AssistantCore:
                 if disabled:
                     return disabled
                 if action == "click":
-                    return AssistantReply(self.desktop.mouse_click(value))
+                    return self._execute_registered_action("mouse.click", {"button": value})
                 if action == "double":
-                    return AssistantReply(self.desktop.mouse_double_click())
+                    return self._execute_registered_action("mouse.double_click")
                 if action == "move":
-                    return AssistantReply(self.desktop.move_mouse(value))
+                    return self._execute_registered_action("mouse.move", {"direction": value})
                 if action == "scroll":
-                    return AssistantReply(self.desktop.scroll(value))
+                    return self._execute_registered_action("mouse.scroll", {"direction": value})
 
         if contains_any(text, ("громкость", "звук")):
             percent = self._extract_percent(text)
@@ -2482,31 +1984,31 @@ class AssistantCore:
                 disabled = self._desktop_unavailable()
                 if disabled:
                     return disabled
-                return AssistantReply(self.desktop.set_volume_percent(percent))
+                return self._execute_registered_action("volume.set", {"percent": percent})
 
         if contains_any(text, ("без звука", "выключи звук", "выключи системный звук", "заглуши звук", "mute")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return AssistantReply(self.desktop.volume_mute())
+            return self._execute_registered_action("volume.mute")
 
         if contains_any(text, ("включи звук", "включи системный звук")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return AssistantReply(self.desktop.volume_step("up", presses=1))
+            return self._execute_registered_action("volume.step", {"direction": "up", "presses": 1})
 
         if contains_any(text, ("сделай громче", "громче", "увеличь громкость")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return AssistantReply(self.desktop.volume_step("up"))
+            return self._execute_registered_action("volume.step", {"direction": "up"})
 
         if contains_any(text, ("сделай тише", "тише", "уменьши громкость")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return AssistantReply(self.desktop.volume_step("down"))
+            return self._execute_registered_action("volume.step", {"direction": "down"})
 
         if contains_any(text, ("яркость", "подсветка")):
             percent = self._extract_percent(text)
@@ -2514,32 +2016,32 @@ class AssistantCore:
                 disabled = self._desktop_unavailable()
                 if disabled:
                     return disabled
-                return AssistantReply(self.desktop.set_brightness_percent(percent))
+                return self._execute_registered_action("brightness.set", {"percent": percent})
 
         if contains_any(text, ("очисти корзину", "очистить корзину")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return AssistantReply(self.desktop.empty_recycle_bin())
+            return self._execute_registered_action("recycle_bin.empty")
 
         if contains_any(text, ("заблокируй экран", "блокировка экрана", "заблокировать компьютер")):
             disabled = self._desktop_unavailable()
             if disabled:
                 return disabled
-            return AssistantReply(self.desktop.lock_screen())
+            return self._execute_registered_action("screen.lock")
 
         if contains_any(text, ("отмени выключение", "отмени перезагрузку", "отмена выключения")):
-            return AssistantReply(self.desktop.cancel_power_timer())
+            return self._execute_registered_action("system.cancel_power_timer")
 
         if text.startswith("найди "):
             query = text.removeprefix("найди ").strip()
             if query:
-                return AssistantReply(self.desktop.search_web(query))
+                return self._execute_registered_action("web.search", {"query": query})
 
         if text.startswith("поиск "):
             query = text.removeprefix("поиск ").strip()
             if query:
-                return AssistantReply(self.desktop.search_web(query))
+                return self._execute_registered_action("web.search", {"query": query})
 
         if contains_any(text, ("выключи компьютер", "выключение компьютера")):
             if not self.config.allow_power_commands:
