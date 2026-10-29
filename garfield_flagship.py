@@ -22,6 +22,8 @@ except ImportError:
     ttk = None
 
 import garfield_best as core
+from garfield_agent.secrets import for_disk, from_disk
+from garfield_agent.controller import AgentController
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -46,6 +48,8 @@ def _prefer_existing_local_path(raw_path: str, local_fallback: Path) -> str:
 class FlagshipConfig:
     assistant_name: str = "Гарфилд"
     vosk_model_path: str = ""
+    stt_engine: str = "vosk"
+    whisper_model: str = "base"
     recognition_timeout_sec: int = 20
     llm_provider: str = "nvidia"
     llm_api_url: str = "https://integrate.api.nvidia.com/v1/chat/completions"
@@ -63,6 +67,8 @@ class FlagshipConfig:
     xai_api_key: str = ""
     enable_desktop_commands: bool = True
     allow_power_commands: bool = False
+    persist_history: bool = False
+    enable_schedules: bool = False
     input_mode: str = "auto"
     ui_mode: str = "auto"
     require_name_prefix: bool = False
@@ -92,7 +98,7 @@ class FlagshipConfig:
         raw_data = {}
         if path.exists():
             with path.open("r", encoding="utf-8") as file:
-                raw_data = json.load(file)
+                raw_data = from_disk(json.load(file))
 
         data = dict(raw_data)
         if "use_llm" not in data and "use_ollama" in data:
@@ -177,6 +183,11 @@ class FlagshipConfig:
         )
 
         config.input_mode = config.input_mode.lower().strip()
+        config.stt_engine = config.stt_engine.lower().strip()
+        if config.stt_engine not in {"vosk", "whisper"}:
+            config.stt_engine = "vosk"
+        if config.whisper_model not in {"tiny", "base", "small", "medium"}:
+            config.whisper_model = "base"
         config.ui_mode = config.ui_mode.lower().strip()
         config.llm_provider = core.normalize_llm_provider(config.llm_provider)
         if not config.llm_model:
@@ -234,7 +245,7 @@ def setup_logging() -> None:
 
 def save_config(config: FlagshipConfig, path: Path = CONFIG_PATH) -> None:
     path.write_text(
-        json.dumps(asdict(config), ensure_ascii=False, indent=2) + "\n",
+        json.dumps(for_disk(asdict(config)), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
 
@@ -342,6 +353,8 @@ class FlagshipRuntime:
         self.started = False
         self.session_lines: list[str] = []
         self.wake_active_until = 0.0
+        self.agent_controller = AgentController(BASE_DIR, lambda: self.assistant.llm_client, self.stop_event)
+        self.scheduler_worker: threading.Thread | None = None
 
     def start(self) -> None:
         if self.started:
@@ -350,6 +363,8 @@ class FlagshipRuntime:
         self._prepare_inputs()
         self.tts.start()
         self.command_worker.start()
+        self.scheduler_worker = threading.Thread(target=self._scheduler_loop, daemon=True, name="GarfieldScheduler")
+        self.scheduler_worker.start()
         self.started = True
 
         for line in self._build_diagnostics():
@@ -375,7 +390,30 @@ class FlagshipRuntime:
     def emit(self, kind: str, text: str) -> None:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.session_lines.append(f"{timestamp} | {kind.upper()}: {text}")
+        if len(self.session_lines) > 5000:
+            del self.session_lines[:1000]
+        if getattr(self.config, "persist_history", False) and kind in {"user", "assistant"}:
+            try:
+                self.agent_controller.store.add_message(kind, text)
+            except Exception:
+                logging.exception("Не удалось записать историю в SQLite")
         self.events.put(RuntimeEvent(kind, text, time.time()))
+
+    def _scheduler_loop(self) -> None:
+        while not self.stop_event.wait(15):
+            if not getattr(self.config, "enable_schedules", False):
+                continue
+            try:
+                for label, steps in self.agent_controller.workflows.due_read_only():
+                    result = []
+                    for step in steps:
+                        if self.stop_event.is_set():
+                            return
+                        result.append(self.agent_controller.tools.execute(step["tool"], step["args"]))
+                    self.emit("status", f"Запланированная проверка «{label}»: " + " | ".join(result)[:350])
+            except Exception as error:
+                logging.exception("Ошибка проверки расписания")
+                self.emit("status", f"Ошибка сценария: {error}")
 
     def submit_text(self, text: str, source: str = "manual") -> None:
         normalized = core.normalize_text(text)
@@ -440,10 +478,17 @@ class FlagshipRuntime:
             return
 
         try:
-            self.voice_recognizer = core.VoiceRecognizer(
-                Path(self.config.vosk_model_path),
-                input_device_index=self.config.input_device_index,
-            )
+            if self.config.stt_engine == "whisper":
+                from garfield_agent.whisper_voice import WhisperRecognizer
+                self.voice_recognizer = WhisperRecognizer(
+                    model_name=self.config.whisper_model,
+                    input_device_index=self.config.input_device_index,
+                )
+            else:
+                self.voice_recognizer = core.VoiceRecognizer(
+                    Path(self.config.vosk_model_path),
+                    input_device_index=self.config.input_device_index,
+                )
             self.input_mode = "voice"
         except Exception as error:
             if self.config.input_mode == "voice":
@@ -519,7 +564,11 @@ class FlagshipRuntime:
     def _build_diagnostics(self) -> list[str]:
         llm_state = "доступен" if self.assistant.llm_client and self.assistant.llm_client.is_available() else "недоступен"
         llm_label = core.describe_llm_provider(self.config.llm_provider)
-        vosk_state = "найдена" if Path(self.config.vosk_model_path).exists() else "не найдена"
+        vosk_state = (
+            f"Whisper {self.config.whisper_model}"
+            if self.config.stt_engine == "whisper"
+            else ("найдена" if Path(self.config.vosk_model_path).exists() else "не найдена")
+        )
         piper_state = "готов" if Path(self.config.piper_model_path).exists() and Path(self.config.piper_config_path).exists() else "недоступен"
         gui_state = "доступен" if tk is not None else "недоступен"
         return [
@@ -609,33 +658,29 @@ class FlagshipRuntime:
             except queue.Empty:
                 continue
 
-            self.emit("user", f"[{source}] {text}")
-            self.emit("progress", self._command_progress_text(text))
-            runtime_reply = self._handle_runtime_command(text)
-            if runtime_reply is not None:
-                self.emit("assistant", runtime_reply.text)
-                if runtime_reply.should_speak:
-                    self.tts.speak(runtime_reply.text)
-                if runtime_reply.should_exit:
+            try:
+                self.emit("user", f"[{source}] {text}")
+                self.emit("progress", self._command_progress_text(text))
+                reply = self._handle_runtime_command(text)
+                if reply is None:
+                    reply = self.assistant.handle(text)
+                if reply is None:
+                    self.emit("status", "Команда проигнорирована.")
+                    continue
+                if reply.text:
+                    self.emit("assistant", reply.text)
+                    if reply.should_speak:
+                        self.tts.speak(reply.text)
+                if reply.should_exit:
                     self.stop_event.set()
+            except Exception as error:
+                logging.exception("Ошибка исполнения команды")
+                try:
+                    self.emit("status", f"Ошибка команды: {type(error).__name__}. Подробности в журнале.")
+                except Exception:
+                    logging.exception("Не удалось отправить сообщение об ошибке")
+            finally:
                 self.command_queue.task_done()
-                continue
-
-            reply = self.assistant.handle(text)
-            if reply is None:
-                self.emit("status", "Команда проигнорирована.")
-                self.command_queue.task_done()
-                continue
-
-            if reply.text:
-                self.emit("assistant", reply.text)
-                if reply.should_speak:
-                    self.tts.speak(reply.text)
-
-            if reply.should_exit:
-                self.stop_event.set()
-
-            self.command_queue.task_done()
 
     def _command_progress_text(self, text: str) -> str:
         if self._is_stop_speaking_command(text):
@@ -653,6 +698,9 @@ class FlagshipRuntime:
         return "Думаю..."
 
     def _handle_runtime_command(self, text: str) -> core.AssistantReply | None:
+        response = self.agent_controller.handle(text)
+        if response is not None:
+            return core.AssistantReply(response, should_speak=False)
         if core.contains_any(text, ("диагностика", "статус системы", "покажи статус", "покажи диагностику")):
             return core.AssistantReply(self._runtime_status_text())
 

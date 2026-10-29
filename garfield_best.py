@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -22,6 +23,7 @@ from typing import Optional
 from urllib.parse import quote_plus
 
 import requests
+from garfield_agent.secrets import from_disk
 
 try:
     import pyautogui
@@ -66,6 +68,8 @@ def _prefer_existing_local_path(raw_path: str, local_fallback: Path) -> str:
 class AppConfig:
     assistant_name: str = "Гарфилд"
     vosk_model_path: str = ""
+    stt_engine: str = "vosk"
+    whisper_model: str = "base"
     recognition_timeout_sec: int = 20
     llm_provider: str = "nvidia"
     llm_api_url: str = "https://integrate.api.nvidia.com/v1/chat/completions"
@@ -83,6 +87,8 @@ class AppConfig:
     xai_api_key: str = ""
     enable_desktop_commands: bool = True
     allow_power_commands: bool = False
+    persist_history: bool = False
+    enable_schedules: bool = False
     input_mode: str = "auto"
     require_name_prefix: bool = False
     activation_mode: str = "wake_word"
@@ -109,7 +115,7 @@ class AppConfig:
         raw_data = {}
         if path.exists():
             with path.open("r", encoding="utf-8") as file:
-                raw_data = json.load(file)
+                raw_data = from_disk(json.load(file))
 
         data = dict(raw_data)
         if "use_llm" not in data and "use_ollama" in data:
@@ -192,8 +198,13 @@ class AppConfig:
         config.skills_path = _prefer_existing_local_path(config.skills_path, SKILLS_PATH)
 
         config.input_mode = config.input_mode.lower().strip()
+        config.stt_engine = config.stt_engine.lower().strip()
+        if config.stt_engine not in {"vosk", "whisper"}:
+            config.stt_engine = "vosk"
+        if config.whisper_model not in {"tiny", "base", "small", "medium"}:
+            config.whisper_model = "base"
         config.llm_provider = normalize_llm_provider(config.llm_provider)
-        if not config.llm_model:
+        if not config.llm_model or config.llm_model not in llm_model_ids(config.llm_provider):
             config.llm_model = default_llm_model(config.llm_provider)
         config.llm_api_url = default_llm_api_url(config.llm_provider, config.llm_api_url)
         config.activation_mode = config.activation_mode.lower().strip()
@@ -288,6 +299,15 @@ class ConversationHistory:
             messages.append({"role": "user", "content": user_text})
             messages.append({"role": "assistant", "content": assistant_text})
         return messages
+
+
+@dataclass
+class PendingSkillAction:
+    match: SkillMatch
+    created_at: float
+
+    def is_expired(self, timeout_sec: int) -> bool:
+        return time.time() - self.created_at > timeout_sec
 
 
 class SkillRegistry:
@@ -399,12 +419,11 @@ class SkillRegistry:
 
         if skill.action == "run":
             if skill.use_shell:
-                subprocess.Popen(target, shell=True)
-            else:
-                command = [target, *arguments] if target else arguments
-                if not command:
-                    raise ValueError("Для run-навыка не задан target.")
-                subprocess.Popen(command)
+                raise PermissionError("Исполнение через shell=True запрещено. Используйте аргументы без оболочки.")
+            command = [target, *arguments] if target else arguments
+            if not command:
+                raise ValueError("Для run-навыка не задан target.")
+            subprocess.Popen(command, shell=False)
             return response or "Команда запущена."
 
         if skill.action == "python":
@@ -1107,6 +1126,16 @@ class KeyboardInput:
 
 
 LLM_PROVIDERS: dict[str, dict[str, object]] = {
+    "ollama": {
+        "name": "Ollama (локально)",
+        "api": "ollama",
+        "chat_url": "http://127.0.0.1:11434/api/chat",
+        "api_key_env": "",
+        "models": [
+            {"id": "qwen2.5:3b", "name": "Qwen2.5 3B"},
+            {"id": "qwen2.5:7b", "name": "Qwen2.5 7B"},
+        ],
+    },
     "nvidia": {
         "name": "NVIDIA",
         "api": "openai-completions",
@@ -1169,7 +1198,7 @@ def normalize_llm_provider(provider: str) -> str:
         "google_gemini": "gemini",
         "google-gemini": "gemini",
         "openai-chat": "openai",
-        "grok": "groq",
+        "grok": "xai",
         "x-ai": "xai",
     }
     value = aliases.get(value, value)
@@ -1242,7 +1271,7 @@ class LLMClient:
         self.session = requests.Session()
 
     def is_available(self) -> bool:
-        return bool(os.getenv(self.api_key_env, "").strip() or self.api_key)
+        return self.provider == "ollama" or bool(os.getenv(self.api_key_env, "").strip() or self.api_key)
 
     def _api_key(self) -> str:
         key = os.getenv(self.api_key_env, "").strip() or self.api_key
@@ -1279,6 +1308,19 @@ class LLMClient:
         messages = self._messages(user_text, assistant_name, history)
         if self.api_type == "gemini-generate-content":
             return self._ask_gemini(messages, max_tokens=max_tokens, timeout_sec=timeout_sec)
+        if self.api_type == "ollama":
+            # Keep this endpoint on loopback: conversation content must not be
+            # forwarded to arbitrary remote addresses as a "local" provider.
+            from urllib.parse import urlsplit
+            address = urlsplit(self.api_url)
+            if address.scheme != "http" or address.hostname not in {"127.0.0.1", "localhost", "::1"}:
+                raise ValueError("Ollama разрешён только на локальном компьютере")
+            response = self.session.post(
+                self.api_url, json={"model": self.model, "messages": messages, "stream": False},
+                timeout=(5, max(timeout_sec, 60)),
+            )
+            response.raise_for_status()
+            return str(response.json().get("message", {}).get("content", "")).strip()
         return self._ask_openai_compatible(messages, max_tokens=max_tokens, timeout_sec=timeout_sec)
 
     def _ask_openai_compatible(self, messages: list[dict[str, str]], max_tokens: int, timeout_sec: int) -> str:
@@ -1805,10 +1847,11 @@ class AssistantCore:
         self.desktop = DesktopController(config.allow_power_commands)
         self.llm_client = create_llm_client(config)
         self.pending_power_action: Optional[PendingPowerAction] = None
+        self.pending_skill_action: Optional[PendingSkillAction] = None
         self.last_answer = ""
         self.last_user_command = ""
         self.previous_user_command = ""
-        self.answer_cache: OrderedDict[str, str] = OrderedDict()
+        self.answer_cache: OrderedDict[str, tuple[float, str]] = OrderedDict()
         self.skills = SkillRegistry(Path(config.skills_path))
 
     def handle(self, raw_text: str) -> Optional[AssistantReply]:
@@ -1824,6 +1867,11 @@ class AssistantCore:
 
         if self.pending_power_action:
             reply = self._handle_pending_power_action(text)
+            if reply:
+                return self._remember(text, reply)
+
+        if self.pending_skill_action:
+            reply = self._handle_pending_skill_action(text)
             if reply:
                 return self._remember(text, reply)
 
@@ -1865,6 +1913,23 @@ class AssistantCore:
             f"Для подтверждения скажите {confirm_phrases[0]} или скажите {cancel_phrases[0]}."
         )
 
+    def _handle_pending_skill_action(self, text: str) -> AssistantReply:
+        pending = self.pending_skill_action
+        if pending is None:
+            return AssistantReply("Нет ожидающей команды.")
+        self.pending_skill_action = None
+        timeout = getattr(self.config, "command_confirmation_timeout_sec", 20)
+        if pending.is_expired(timeout):
+            return AssistantReply("Время подтверждения истекло. Навык отменён.")
+        confirms = getattr(self.config, "confirm_phrases", ["да"])
+        if text not in confirms:
+            return AssistantReply("Навык отменён. Для запуска нужно точное подтверждение.")
+        try:
+            return AssistantReply(self.skills.execute(pending.match))
+        except Exception as error:
+            logging.exception("Ошибка подтверждённого навыка %s", pending.match.skill.skill_id)
+            return AssistantReply(f"Навык не выполнен: {error}", should_speak=False)
+
     def _power_action_label(self, kind: str) -> str:
         return {
             "shutdown": "выключение",
@@ -1894,7 +1959,7 @@ class AssistantCore:
         return "\n".join(chunks)
 
     def _handle_builtin_command(self, text: str) -> Optional[AssistantReply]:
-        if contains_any(text, ("остановись", "выход", "стоп", "пока", "заверши")):
+        if text in {"остановись", "выход", "стоп", "пока", "заверши", "гарфилд пока", "гарфилд выход"}:
             return AssistantReply("Завершаю работу. До свидания.", should_exit=True)
 
         if contains_any(text, ("помощь", "что ты умеешь", "твои возможности", "расскажи о себе")):
@@ -2231,6 +2296,12 @@ class AssistantCore:
         match = self.skills.match(text)
         if match is None:
             return None
+        if match.skill.action in {"run", "python", "hotkey"}:
+            self.pending_skill_action = PendingSkillAction(match, time.time())
+            return AssistantReply(
+                f"Подтвердите запуск навыка {match.skill.skill_id}. "
+                "Скажите точно «да» или «подтверждаю». Любой другой ответ отменит действие."
+            )
         try:
             return AssistantReply(self.skills.execute(match))
         except Exception as error:
@@ -2256,27 +2327,33 @@ class AssistantCore:
         )
 
     def _ask_llm_or_fallback(self, text: str) -> str:
-        if text in self.answer_cache:
-            self.answer_cache.move_to_end(text)
-            return self.answer_cache[text]
+        # Cache by provider, model AND prior turns. Never cache transient API failures.
+        context = json.dumps(self.history.as_messages(), ensure_ascii=False)
+        provider = self.llm_client.provider if self.llm_client else "offline"
+        model = self.llm_client.model if self.llm_client else ""
+        key = hashlib.sha256(f"{provider}\0{model}\0{context}\0{text}".encode("utf-8")).hexdigest()
+        cached = self.answer_cache.get(key)
+        if cached:
+            saved_at, value = cached
+            if time.monotonic() - saved_at < 300:
+                self.answer_cache.move_to_end(key)
+                return value
+            del self.answer_cache[key]
 
         if self.llm_client and self.llm_client.is_available():
             try:
                 answer = self.llm_client.ask(text, self.config.assistant_name, self.history)
                 if answer:
-                    self._remember_answer(text, answer)
+                    self._remember_answer(key, answer)
                     return answer
-            except requests.RequestException as error:
-                provider = describe_llm_provider(getattr(self.llm_client, "provider", "nvidia"))
-                logging.warning("%s API временно недоступен: %s", provider, error)
+            except (requests.RequestException, RuntimeError, ValueError, KeyError, TypeError) as error:
+                provider_name = describe_llm_provider(self.llm_client.provider)
+                logging.warning("%s API недоступен: %s", provider_name, error)
+        return self._fallback_answer(text)
 
-        answer = self._fallback_answer(text)
-        self._remember_answer(text, answer)
-        return answer
-
-    def _remember_answer(self, prompt: str, answer: str) -> None:
-        self.answer_cache[prompt] = answer
-        self.answer_cache.move_to_end(prompt)
+    def _remember_answer(self, key: str, answer: str) -> None:
+        self.answer_cache[key] = (time.monotonic(), answer)
+        self.answer_cache.move_to_end(key)
         while len(self.answer_cache) > self.config.max_cached_answers:
             self.answer_cache.popitem(last=False)
 

@@ -100,6 +100,13 @@ class HistoryPage(ctk.CTkFrame):
         created_at = getattr(event, "created_at", None)
         timestamp = datetime.fromtimestamp(created_at).strftime("%Y-%m-%d %H:%M:%S") if created_at else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.items.append(HistoryItem(role, text, timestamp))
+        if len(self.items) > 1000:
+            del self.items[:200]
+        # Hidden pages should not rebuild hundreds of widgets on every event.
+        if self.app.current_page_key == "history":
+            self.render()
+
+    def on_show(self) -> None:
         self.render()
 
     def render(self) -> None:
@@ -118,7 +125,7 @@ class HistoryPage(ctk.CTkFrame):
                 continue
             filtered.append(item)
 
-        for index, item in enumerate(filtered):
+        for index, item in enumerate(filtered[-120:]):
             self._add_row(index, item)
 
     def _add_row(self, index: int, item: HistoryItem) -> None:

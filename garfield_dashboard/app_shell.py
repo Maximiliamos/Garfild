@@ -15,6 +15,7 @@ import customtkinter as ctk
 
 from .components import ConfirmDialog, StatusPill
 from .pages.audio import AudioPage
+from .pages.automation import AutomationPage
 from .pages.chat import ChatPage
 from .pages.commands import CommandsPage
 from .pages.diagnostics import DiagnosticsPage
@@ -33,6 +34,7 @@ PAGE_META = {
     "voice": ("Голос", "Прослушивание, wake word и шумовой порог."),
     "audio": ("Звук", "Микрофон, устройство вывода и тесты аудио."),
     "skills": ("Навыки", "Локальные команды и действия ассистента."),
+    "automation": ("ИИ-агент", "Планы, сценарии, заметки и история."),
     "diagnostics": ("Диагностика", "Состояние моделей, API, памяти и устройств."),
     "settings": ("Настройки", "Конфиг приложения, модели и API."),
     "history": ("История", "Сообщения текущей сессии, фильтры и экспорт."),
@@ -242,6 +244,7 @@ class DashboardApp(ctk.CTk):
             "voice": VoicePage,
             "audio": AudioPage,
             "skills": SkillsPage,
+            "automation": AutomationPage,
             "diagnostics": DiagnosticsPage,
             "settings": SettingsPage,
             "history": HistoryPage,
@@ -343,6 +346,8 @@ class DashboardApp(ctk.CTk):
         kind = getattr(event, "kind", "")
         text = getattr(event, "text", "")
         self.event_history.append(event)
+        if len(self.event_history) > 500:
+            del self.event_history[:100]
         if kind == "status":
             self.current_status = text
             self.show_notice(text, "info")

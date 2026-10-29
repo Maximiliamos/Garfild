@@ -199,6 +199,12 @@ class ChatPage(ctk.CTkFrame):
         ).grid(row=1, column=0, sticky="ew", padx=12, pady=(2, 10))
 
         self.message_rows.append(row)
+        if len(self.message_rows) > 160:
+            for old in self.message_rows[:40]:
+                old.destroy()
+            self.message_rows = self.message_rows[40:]
+            for index, existing in enumerate(self.message_rows):
+                existing.grid_configure(row=index)
         self.after(20, self._scroll_to_bottom)
         self.after(90, self._scroll_to_bottom)
         self.after_idle(self._scroll_to_bottom)

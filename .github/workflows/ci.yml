@@ -1,0 +1,25 @@
+name: Garfield checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  checks:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile Python files
+        run: python -m compileall -q garfield_best.py garfield_flagship.py garfield_dashboard garfield_agent
+      - name: Test safety and regressions
+        run: python -m unittest discover -s tests -v

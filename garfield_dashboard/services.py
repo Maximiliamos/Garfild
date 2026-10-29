@@ -294,6 +294,8 @@ class RuntimeAdapter:
         cfg.tts_enabled = bool(values["tts_enabled"])
         cfg.enable_desktop_commands = bool(values["enable_desktop_commands"])
         cfg.allow_power_commands = bool(values["allow_power_commands"])
+        cfg.persist_history = bool(values["persist_history"])
+        cfg.enable_schedules = bool(values["enable_schedules"])
         cfg.screen_hints_enabled = bool(values["screen_hints_enabled"])
         cfg.command_confirmation_timeout_sec = max(5, min(int(values["command_confirmation_timeout_sec"]), 120))
         cfg.confirm_phrases = [core.normalize_text(item) for item in str(values["confirm_phrases"]).split(",") if core.normalize_text(item)]
@@ -303,6 +305,8 @@ class RuntimeAdapter:
         if not cfg.cancel_phrases:
             cfg.cancel_phrases = ["нет", "отмена", "отмени", "не надо"]
         cfg.vosk_model_path = values["vosk_model_path"].strip()
+        cfg.stt_engine = values["stt_engine"] if values["stt_engine"] in {"vosk", "whisper"} else "vosk"
+        cfg.whisper_model = values["whisper_model"] if values["whisper_model"] in {"tiny", "base", "small", "medium"} else "base"
         cfg.tts_voice = values["tts_voice"].strip() or "ru-RU-SvetlanaNeural"
         cfg.piper_model_path = values["piper_model_path"].strip()
         cfg.piper_config_path = values["piper_config_path"].strip()

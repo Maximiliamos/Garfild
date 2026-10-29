@@ -1,6 +1,9 @@
 garfield_flagship_config.json
 .env
 *.log
+*.sqlite3
+*.sqlite3-*
+garfield_workflows.json
 garfield_session_history.txt
 test_kiro_key.py
 Новый текстовый документ.txt

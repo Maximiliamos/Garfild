@@ -26,12 +26,16 @@ class SettingsPage(ctk.CTkFrame):
             "tts_enabled": tk.BooleanVar(),
             "enable_desktop_commands": tk.BooleanVar(),
             "allow_power_commands": tk.BooleanVar(),
+            "persist_history": tk.BooleanVar(),
+            "enable_schedules": tk.BooleanVar(),
             "screen_hints_enabled": tk.BooleanVar(),
             "command_confirmation_timeout_sec": tk.StringVar(),
             "confirm_phrases": tk.StringVar(),
             "cancel_phrases": tk.StringVar(),
             "tts_voice": tk.StringVar(),
             "vosk_model_path": tk.StringVar(),
+            "stt_engine": tk.StringVar(),
+            "whisper_model": tk.StringVar(),
             "piper_model_path": tk.StringVar(),
             "piper_config_path": tk.StringVar(),
             "llm_provider": tk.StringVar(),
@@ -84,6 +88,8 @@ class SettingsPage(ctk.CTkFrame):
         self._switch("Озвучка ответов", row, self.vars["tts_enabled"]); row += 1
         self._switch("Desktop-команды", row, self.vars["enable_desktop_commands"]); row += 1
         self._switch("Силовые команды", row, self.vars["allow_power_commands"]); row += 1
+        self._switch("Сохранять историю в SQLite", row, self.vars["persist_history"]); row += 1
+        self._switch("Расписание безопасных проверок", row, self.vars["enable_schedules"]); row += 1
         self._switch("Экранные подсказки", row, self.vars["screen_hints_enabled"]); row += 1
 
         row = self._section("Подтверждение команд", row)
@@ -92,6 +98,8 @@ class SettingsPage(ctk.CTkFrame):
         labeled_input(self.form, "Фразы отмены", row, self.vars["cancel_phrases"]); row += 1
 
         row = self._section("Модели и API", row)
+        self._option("Распознавание речи", row, self.vars["stt_engine"], ["vosk", "whisper"]); row += 1
+        self._option("Whisper model", row, self.vars["whisper_model"], ["tiny", "base", "small", "medium"]); row += 1
         labeled_input(self.form, "Vosk model path", row, self.vars["vosk_model_path"]); row += 1
         labeled_input(self.form, "Голос Edge TTS", row, self.vars["tts_voice"]); row += 1
         labeled_input(self.form, "Piper model path", row, self.vars["piper_model_path"]); row += 1
@@ -183,12 +191,16 @@ class SettingsPage(ctk.CTkFrame):
             "tts_enabled": cfg.tts_enabled,
             "enable_desktop_commands": cfg.enable_desktop_commands,
             "allow_power_commands": cfg.allow_power_commands,
+            "persist_history": getattr(cfg, "persist_history", False),
+            "enable_schedules": getattr(cfg, "enable_schedules", False),
             "screen_hints_enabled": cfg.screen_hints_enabled,
             "command_confirmation_timeout_sec": str(cfg.command_confirmation_timeout_sec),
             "confirm_phrases": ", ".join(cfg.confirm_phrases),
             "cancel_phrases": ", ".join(cfg.cancel_phrases),
             "tts_voice": cfg.tts_voice,
             "vosk_model_path": cfg.vosk_model_path,
+            "stt_engine": getattr(cfg, "stt_engine", "vosk"),
+            "whisper_model": getattr(cfg, "whisper_model", "base"),
             "piper_model_path": cfg.piper_model_path,
             "piper_config_path": cfg.piper_config_path,
             "llm_provider": core.normalize_llm_provider(getattr(cfg, "llm_provider", "nvidia")),

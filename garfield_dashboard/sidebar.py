@@ -16,6 +16,7 @@ NAV_ITEMS = [
     ("voice", "Голос"),
     ("audio", "Звук"),
     ("skills", "Навыки"),
+    ("automation", "ИИ-агент"),
     ("diagnostics", "Диагностика"),
     ("settings", "Настройки"),
     ("history", "История"),

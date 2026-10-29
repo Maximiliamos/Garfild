@@ -1,0 +1,21 @@
+{
+  "workflows": [
+    {
+      "id": "system-check",
+      "name": "Проверка компьютера",
+      "steps": [
+        {"tool": "system_status", "args": {}},
+        {"tool": "list_files", "args": {"path": "."}}
+      ],
+      "daily_at": null
+    },
+    {
+      "id": "morning-check",
+      "name": "Ежедневная диагностика",
+      "steps": [
+        {"tool": "system_status", "args": {}}
+      ],
+      "daily_at": "09:00"
+    }
+  ]
+}
