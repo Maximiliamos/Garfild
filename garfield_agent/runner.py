@@ -78,9 +78,11 @@ class PlanRunner:
             f"Не более {MAX_STEPS} шагов. Когда задача не поддерживается, верни JSON с полем error. "
             "Инструменты: " + schema + "\nЗадача: " + task
         )
-        # A new empty history keeps planner output independent of private chat context.
-        from garfield_best import ConversationHistory
-        response = llm.ask(prompt, "Гарфилд", ConversationHistory(0), max_tokens=800, timeout_sec=25)
+        # A standalone empty history avoids importing the desktop/audio core here.
+        class EmptyHistory:
+            def as_messages(self) -> list[dict[str, str]]:
+                return []
+        response = llm.ask(prompt, "Гарфилд", EmptyHistory(), max_tokens=800, timeout_sec=25)
         response = response.strip()
         if response.startswith("```"):
             response = re.sub(r"^\x60{3}(?:json)?\s*|\s*\x60{3}$", "", response).strip()
