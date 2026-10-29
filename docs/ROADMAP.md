@@ -1,6 +1,10 @@
 # Garfield development roadmap
 
 ## Implemented on this branch
+- Add a constrained agent JSON planner with user approval and 6-step limit; results are recorded in SQLite.
+- Allowlist of local tools including workspace files, notes, app launch, browser and web search.
+- Add a dashboard tab for agent plans, workflow JSON validation/editor and local notes.
+- Add opt-in SQLite conversation persistence and safe read-only daily scheduling.
 - Add optional localhost-only Ollama API provider (requires a separately installed Ollama server and model).
 - Fix exact exit-command matching (avoids "покажи" triggering "пока").
 - Fix Grok provider alias to xAI.
@@ -14,8 +18,8 @@
 ## Not yet implemented or verified
 - Windows Credential Manager / DPAPI secret storage and migration.
 - Automated Ollama model download and llama.cpp provider (basic local Ollama HTTP integration is implemented).
-- Durable SQLite conversation history and opt-in personal memory.
-- Scheduled workflows, filesystem/event triggers and rollback.
+- Encrypted personal memory, automatic retrieval of relevant notes and cross-device sync (SQLite notes + opt-in local conversation history implemented).
+- Trigger-based workflows, drag-and-drop visual editor and rollback (JSON workflows + daily read-only scheduler + GUI editor implemented).
 - Faster-whisper integration and dedicated wake word model.
 - Signed Windows installer and automatic updater.
 - Full modularization of core/GUI and dependency isolation.
