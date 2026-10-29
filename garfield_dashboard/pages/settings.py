@@ -34,6 +34,8 @@ class SettingsPage(ctk.CTkFrame):
             "cancel_phrases": tk.StringVar(),
             "tts_voice": tk.StringVar(),
             "vosk_model_path": tk.StringVar(),
+            "stt_engine": tk.StringVar(),
+            "whisper_model": tk.StringVar(),
             "piper_model_path": tk.StringVar(),
             "piper_config_path": tk.StringVar(),
             "llm_provider": tk.StringVar(),
@@ -96,6 +98,8 @@ class SettingsPage(ctk.CTkFrame):
         labeled_input(self.form, "Фразы отмены", row, self.vars["cancel_phrases"]); row += 1
 
         row = self._section("Модели и API", row)
+        self._option("Распознавание речи", row, self.vars["stt_engine"], ["vosk", "whisper"]); row += 1
+        self._option("Whisper model", row, self.vars["whisper_model"], ["tiny", "base", "small", "medium"]); row += 1
         labeled_input(self.form, "Vosk model path", row, self.vars["vosk_model_path"]); row += 1
         labeled_input(self.form, "Голос Edge TTS", row, self.vars["tts_voice"]); row += 1
         labeled_input(self.form, "Piper model path", row, self.vars["piper_model_path"]); row += 1
@@ -195,6 +199,8 @@ class SettingsPage(ctk.CTkFrame):
             "cancel_phrases": ", ".join(cfg.cancel_phrases),
             "tts_voice": cfg.tts_voice,
             "vosk_model_path": cfg.vosk_model_path,
+            "stt_engine": getattr(cfg, "stt_engine", "vosk"),
+            "whisper_model": getattr(cfg, "whisper_model", "base"),
             "piper_model_path": cfg.piper_model_path,
             "piper_config_path": cfg.piper_config_path,
             "llm_provider": core.normalize_llm_provider(getattr(cfg, "llm_provider", "nvidia")),

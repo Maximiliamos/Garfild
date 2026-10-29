@@ -305,6 +305,8 @@ class RuntimeAdapter:
         if not cfg.cancel_phrases:
             cfg.cancel_phrases = ["нет", "отмена", "отмени", "не надо"]
         cfg.vosk_model_path = values["vosk_model_path"].strip()
+        cfg.stt_engine = values["stt_engine"] if values["stt_engine"] in {"vosk", "whisper"} else "vosk"
+        cfg.whisper_model = values["whisper_model"] if values["whisper_model"] in {"tiny", "base", "small", "medium"} else "base"
         cfg.tts_voice = values["tts_voice"].strip() or "ru-RU-SvetlanaNeural"
         cfg.piper_model_path = values["piper_model_path"].strip()
         cfg.piper_config_path = values["piper_config_path"].strip()

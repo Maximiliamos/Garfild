@@ -68,6 +68,8 @@ def _prefer_existing_local_path(raw_path: str, local_fallback: Path) -> str:
 class AppConfig:
     assistant_name: str = "Гарфилд"
     vosk_model_path: str = ""
+    stt_engine: str = "vosk"
+    whisper_model: str = "base"
     recognition_timeout_sec: int = 20
     llm_provider: str = "nvidia"
     llm_api_url: str = "https://integrate.api.nvidia.com/v1/chat/completions"
@@ -196,6 +198,11 @@ class AppConfig:
         config.skills_path = _prefer_existing_local_path(config.skills_path, SKILLS_PATH)
 
         config.input_mode = config.input_mode.lower().strip()
+        config.stt_engine = config.stt_engine.lower().strip()
+        if config.stt_engine not in {"vosk", "whisper"}:
+            config.stt_engine = "vosk"
+        if config.whisper_model not in {"tiny", "base", "small", "medium"}:
+            config.whisper_model = "base"
         config.llm_provider = normalize_llm_provider(config.llm_provider)
         if not config.llm_model or config.llm_model not in llm_model_ids(config.llm_provider):
             config.llm_model = default_llm_model(config.llm_provider)

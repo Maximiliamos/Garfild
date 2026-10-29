@@ -48,6 +48,8 @@ def _prefer_existing_local_path(raw_path: str, local_fallback: Path) -> str:
 class FlagshipConfig:
     assistant_name: str = "Гарфилд"
     vosk_model_path: str = ""
+    stt_engine: str = "vosk"
+    whisper_model: str = "base"
     recognition_timeout_sec: int = 20
     llm_provider: str = "nvidia"
     llm_api_url: str = "https://integrate.api.nvidia.com/v1/chat/completions"
@@ -181,6 +183,11 @@ class FlagshipConfig:
         )
 
         config.input_mode = config.input_mode.lower().strip()
+        config.stt_engine = config.stt_engine.lower().strip()
+        if config.stt_engine not in {"vosk", "whisper"}:
+            config.stt_engine = "vosk"
+        if config.whisper_model not in {"tiny", "base", "small", "medium"}:
+            config.whisper_model = "base"
         config.ui_mode = config.ui_mode.lower().strip()
         config.llm_provider = core.normalize_llm_provider(config.llm_provider)
         if not config.llm_model:
@@ -471,10 +478,17 @@ class FlagshipRuntime:
             return
 
         try:
-            self.voice_recognizer = core.VoiceRecognizer(
-                Path(self.config.vosk_model_path),
-                input_device_index=self.config.input_device_index,
-            )
+            if self.config.stt_engine == "whisper":
+                from garfield_agent.whisper_voice import WhisperRecognizer
+                self.voice_recognizer = WhisperRecognizer(
+                    model_name=self.config.whisper_model,
+                    input_device_index=self.config.input_device_index,
+                )
+            else:
+                self.voice_recognizer = core.VoiceRecognizer(
+                    Path(self.config.vosk_model_path),
+                    input_device_index=self.config.input_device_index,
+                )
             self.input_mode = "voice"
         except Exception as error:
             if self.config.input_mode == "voice":
@@ -550,7 +564,11 @@ class FlagshipRuntime:
     def _build_diagnostics(self) -> list[str]:
         llm_state = "доступен" if self.assistant.llm_client and self.assistant.llm_client.is_available() else "недоступен"
         llm_label = core.describe_llm_provider(self.config.llm_provider)
-        vosk_state = "найдена" if Path(self.config.vosk_model_path).exists() else "не найдена"
+        vosk_state = (
+            f"Whisper {self.config.whisper_model}"
+            if self.config.stt_engine == "whisper"
+            else ("найдена" if Path(self.config.vosk_model_path).exists() else "не найдена")
+        )
         piper_state = "готов" if Path(self.config.piper_model_path).exists() and Path(self.config.piper_config_path).exists() else "недоступен"
         gui_state = "доступен" if tk is not None else "недоступен"
         return [

@@ -20,7 +20,7 @@
 - Automated Ollama model download and llama.cpp provider (basic local Ollama HTTP integration is implemented).
 - Encrypted personal memory, automatic retrieval of relevant notes and cross-device sync (SQLite notes + opt-in local conversation history implemented).
 - Trigger-based workflows, drag-and-drop visual editor and rollback (JSON workflows + daily read-only scheduler + GUI editor implemented).
-- Faster-whisper integration and dedicated wake word model.
+- Dedicated on-device wake-word model and real audio benchmarking (optional faster-whisper engine added, not hardware-validated).
 - Signed Windows installer and automatic updater.
 - Full modularization of core/GUI and dependency isolation.
 - Automated hardware-in-the-loop testing of Vosk/Piper/audio and desktop automation.
