@@ -22,6 +22,7 @@ except ImportError:
     ttk = None
 
 import garfield_best as core
+from garfield_agent.secrets import for_disk, from_disk
 from garfield_agent.controller import AgentController
 
 
@@ -95,7 +96,7 @@ class FlagshipConfig:
         raw_data = {}
         if path.exists():
             with path.open("r", encoding="utf-8") as file:
-                raw_data = json.load(file)
+                raw_data = from_disk(json.load(file))
 
         data = dict(raw_data)
         if "use_llm" not in data and "use_ollama" in data:
@@ -237,7 +238,7 @@ def setup_logging() -> None:
 
 def save_config(config: FlagshipConfig, path: Path = CONFIG_PATH) -> None:
     path.write_text(
-        json.dumps(asdict(config), ensure_ascii=False, indent=2) + "\n",
+        json.dumps(for_disk(asdict(config)), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
 

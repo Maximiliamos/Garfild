@@ -23,6 +23,7 @@ from typing import Optional
 from urllib.parse import quote_plus
 
 import requests
+from garfield_agent.secrets import from_disk
 
 try:
     import pyautogui
@@ -112,7 +113,7 @@ class AppConfig:
         raw_data = {}
         if path.exists():
             with path.open("r", encoding="utf-8") as file:
-                raw_data = json.load(file)
+                raw_data = from_disk(json.load(file))
 
         data = dict(raw_data)
         if "use_llm" not in data and "use_ollama" in data:

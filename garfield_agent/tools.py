@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ipaddress
+import socket
 import platform
 import subprocess
 import webbrowser
@@ -139,8 +140,21 @@ class ToolRegistry:
                 browser = playwright.chromium.launch(headless=True)
                 try:
                     page = browser.new_page()
-                    # No script execution and no authenticated browser profiles.
+                    def guard(route):
+                        try:
+                            self._validate_url(route.request.url, strict=True)
+                            host = urlsplit(route.request.url).hostname
+                            # Deny DNS names resolving to private/local networks.
+                            addresses = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+                            if not addresses or any(not ipaddress.ip_address(item[4][0]).is_global for item in addresses):
+                                raise ValueError("Private network address")
+                        except (ValueError, OSError):
+                            route.abort()
+                        else:
+                            route.continue_()
+                    page.route("**/*", guard)
                     page.goto(args["url"], wait_until="domcontentloaded", timeout=15000)
+                    self._validate_url(page.url, strict=True)
                     return page.locator("body").inner_text(timeout=5000)[:5000]
                 finally:
                     browser.close()

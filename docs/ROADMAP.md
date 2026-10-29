@@ -16,7 +16,7 @@
 - Add static regression tests and GitHub CI.
 
 ## Not yet implemented or verified
-- Windows Credential Manager / DPAPI secret storage and migration.
+- Windows DPAPI API-key encryption added on config save; migration/UI key rotation not verified on hardware.
 - Automated Ollama model download and llama.cpp provider (basic local Ollama HTTP integration is implemented).
 - Encrypted personal memory, automatic retrieval of relevant notes and cross-device sync (SQLite notes + opt-in local conversation history implemented).
 - Trigger-based workflows, drag-and-drop visual editor and rollback (JSON workflows + daily read-only scheduler + GUI editor implemented).
@@ -29,8 +29,8 @@
 ## Security notes
 Skills run with the privileges of the user running Garfield. Do not load untrusted skills files or
 untrusted Python scripts. Confirmation helps prevent accidental execution but is not a sandbox.
-The config currently saves API keys in a local plaintext JSON; use environment variables and
-restrict access until DPAPI integration is finished.
+Windows DPAPI encrypts API keys when saving settings; older plaintext config files
+remain readable until saved again. Use environment variables outside Windows.
 
 ## Test on a Windows PC
 1. Create a Python 3.11 virtual environment and install requirements.
