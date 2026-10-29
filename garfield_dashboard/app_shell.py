@@ -343,6 +343,8 @@ class DashboardApp(ctk.CTk):
         kind = getattr(event, "kind", "")
         text = getattr(event, "text", "")
         self.event_history.append(event)
+        if len(self.event_history) > 500:
+            del self.event_history[:100]
         if kind == "status":
             self.current_status = text
             self.show_notice(text, "info")

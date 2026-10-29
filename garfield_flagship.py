@@ -609,33 +609,29 @@ class FlagshipRuntime:
             except queue.Empty:
                 continue
 
-            self.emit("user", f"[{source}] {text}")
-            self.emit("progress", self._command_progress_text(text))
-            runtime_reply = self._handle_runtime_command(text)
-            if runtime_reply is not None:
-                self.emit("assistant", runtime_reply.text)
-                if runtime_reply.should_speak:
-                    self.tts.speak(runtime_reply.text)
-                if runtime_reply.should_exit:
+            try:
+                self.emit("user", f"[{source}] {text}")
+                self.emit("progress", self._command_progress_text(text))
+                reply = self._handle_runtime_command(text)
+                if reply is None:
+                    reply = self.assistant.handle(text)
+                if reply is None:
+                    self.emit("status", "Команда проигнорирована.")
+                    continue
+                if reply.text:
+                    self.emit("assistant", reply.text)
+                    if reply.should_speak:
+                        self.tts.speak(reply.text)
+                if reply.should_exit:
                     self.stop_event.set()
+            except Exception as error:
+                logging.exception("Ошибка исполнения команды")
+                try:
+                    self.emit("status", f"Ошибка команды: {type(error).__name__}. Подробности в журнале.")
+                except Exception:
+                    logging.exception("Не удалось отправить сообщение об ошибке")
+            finally:
                 self.command_queue.task_done()
-                continue
-
-            reply = self.assistant.handle(text)
-            if reply is None:
-                self.emit("status", "Команда проигнорирована.")
-                self.command_queue.task_done()
-                continue
-
-            if reply.text:
-                self.emit("assistant", reply.text)
-                if reply.should_speak:
-                    self.tts.speak(reply.text)
-
-            if reply.should_exit:
-                self.stop_event.set()
-
-            self.command_queue.task_done()
 
     def _command_progress_text(self, text: str) -> str:
         if self._is_stop_speaking_command(text):
