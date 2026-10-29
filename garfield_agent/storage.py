@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 import sqlite3
 import threading
 import time
@@ -35,10 +36,20 @@ class LocalStore:
                 );
             """)
 
+    @contextmanager
     def _connect(self):
+        # sqlite3.Connection.__exit__ commits but does NOT close the handle.
+        # Explicit closing is critical on Windows, which locks open DB files.
         db = sqlite3.connect(self.path, timeout=5.0)
         db.execute("PRAGMA busy_timeout = 5000")
-        return db
+        try:
+            yield db
+            db.commit()
+        except BaseException:
+            db.rollback()
+            raise
+        finally:
+            db.close()
 
     def add_note(self, content: str) -> int:
         content = content.strip()
