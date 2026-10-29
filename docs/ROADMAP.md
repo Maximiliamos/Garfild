@@ -1,6 +1,7 @@
 # Garfield development roadmap
 
 ## Implemented on this branch
+- Add optional localhost-only Ollama API provider (requires a separately installed Ollama server and model).
 - Fix exact exit-command matching (avoids "покажи" triggering "пока").
 - Fix Grok provider alias to xAI.
 - Context-aware, model-specific response cache with a 5-minute TTL; do not cache API-failure fallbacks.
@@ -12,7 +13,7 @@
 
 ## Not yet implemented or verified
 - Windows Credential Manager / DPAPI secret storage and migration.
-- Local Ollama/llama.cpp provider, first-run model downloads.
+- Automated Ollama model download and llama.cpp provider (basic local Ollama HTTP integration is implemented).
 - Durable SQLite conversation history and opt-in personal memory.
 - Scheduled workflows, filesystem/event triggers and rollback.
 - Faster-whisper integration and dedicated wake word model.

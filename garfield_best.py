@@ -194,7 +194,7 @@ class AppConfig:
 
         config.input_mode = config.input_mode.lower().strip()
         config.llm_provider = normalize_llm_provider(config.llm_provider)
-        if not config.llm_model:
+        if not config.llm_model or config.llm_model not in llm_model_ids(config.llm_provider):
             config.llm_model = default_llm_model(config.llm_provider)
         config.llm_api_url = default_llm_api_url(config.llm_provider, config.llm_api_url)
         config.activation_mode = config.activation_mode.lower().strip()
@@ -1116,6 +1116,16 @@ class KeyboardInput:
 
 
 LLM_PROVIDERS: dict[str, dict[str, object]] = {
+    "ollama": {
+        "name": "Ollama (локально)",
+        "api": "ollama",
+        "chat_url": "http://127.0.0.1:11434/api/chat",
+        "api_key_env": "",
+        "models": [
+            {"id": "qwen2.5:3b", "name": "Qwen2.5 3B"},
+            {"id": "qwen2.5:7b", "name": "Qwen2.5 7B"},
+        ],
+    },
     "nvidia": {
         "name": "NVIDIA",
         "api": "openai-completions",
@@ -1251,7 +1261,7 @@ class LLMClient:
         self.session = requests.Session()
 
     def is_available(self) -> bool:
-        return bool(os.getenv(self.api_key_env, "").strip() or self.api_key)
+        return self.provider == "ollama" or bool(os.getenv(self.api_key_env, "").strip() or self.api_key)
 
     def _api_key(self) -> str:
         key = os.getenv(self.api_key_env, "").strip() or self.api_key
@@ -1288,6 +1298,19 @@ class LLMClient:
         messages = self._messages(user_text, assistant_name, history)
         if self.api_type == "gemini-generate-content":
             return self._ask_gemini(messages, max_tokens=max_tokens, timeout_sec=timeout_sec)
+        if self.api_type == "ollama":
+            # Keep this endpoint on loopback: conversation content must not be
+            # forwarded to arbitrary remote addresses as a "local" provider.
+            from urllib.parse import urlsplit
+            address = urlsplit(self.api_url)
+            if address.scheme != "http" or address.hostname not in {"127.0.0.1", "localhost", "::1"}:
+                raise ValueError("Ollama разрешён только на локальном компьютере")
+            response = self.session.post(
+                self.api_url, json={"model": self.model, "messages": messages, "stream": False},
+                timeout=(5, max(timeout_sec, 60)),
+            )
+            response.raise_for_status()
+            return str(response.json().get("message", {}).get("content", "")).strip()
         return self._ask_openai_compatible(messages, max_tokens=max_tokens, timeout_sec=timeout_sec)
 
     def _ask_openai_compatible(self, messages: list[dict[str, str]], max_tokens: int, timeout_sec: int) -> str:
