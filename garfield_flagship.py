@@ -22,6 +22,7 @@ except ImportError:
     ttk = None
 
 import garfield_best as core
+from garfield_agent.controller import AgentController
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -63,6 +64,8 @@ class FlagshipConfig:
     xai_api_key: str = ""
     enable_desktop_commands: bool = True
     allow_power_commands: bool = False
+    persist_history: bool = False
+    enable_schedules: bool = False
     input_mode: str = "auto"
     ui_mode: str = "auto"
     require_name_prefix: bool = False
@@ -342,6 +345,8 @@ class FlagshipRuntime:
         self.started = False
         self.session_lines: list[str] = []
         self.wake_active_until = 0.0
+        self.agent_controller = AgentController(BASE_DIR, lambda: self.assistant.llm_client, self.stop_event)
+        self.scheduler_worker: threading.Thread | None = None
 
     def start(self) -> None:
         if self.started:
@@ -350,6 +355,8 @@ class FlagshipRuntime:
         self._prepare_inputs()
         self.tts.start()
         self.command_worker.start()
+        self.scheduler_worker = threading.Thread(target=self._scheduler_loop, daemon=True, name="GarfieldScheduler")
+        self.scheduler_worker.start()
         self.started = True
 
         for line in self._build_diagnostics():
@@ -375,7 +382,30 @@ class FlagshipRuntime:
     def emit(self, kind: str, text: str) -> None:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.session_lines.append(f"{timestamp} | {kind.upper()}: {text}")
+        if len(self.session_lines) > 5000:
+            del self.session_lines[:1000]
+        if getattr(self.config, "persist_history", False) and kind in {"user", "assistant"}:
+            try:
+                self.agent_controller.store.add_message(kind, text)
+            except Exception:
+                logging.exception("Не удалось записать историю в SQLite")
         self.events.put(RuntimeEvent(kind, text, time.time()))
+
+    def _scheduler_loop(self) -> None:
+        while not self.stop_event.wait(15):
+            if not getattr(self.config, "enable_schedules", False):
+                continue
+            try:
+                for label, steps in self.agent_controller.workflows.due_read_only():
+                    result = []
+                    for step in steps:
+                        if self.stop_event.is_set():
+                            return
+                        result.append(self.agent_controller.tools.execute(step["tool"], step["args"]))
+                    self.emit("status", f"Запланированная проверка «{label}»: " + " | ".join(result)[:350])
+            except Exception as error:
+                logging.exception("Ошибка проверки расписания")
+                self.emit("status", f"Ошибка сценария: {error}")
 
     def submit_text(self, text: str, source: str = "manual") -> None:
         normalized = core.normalize_text(text)
@@ -649,6 +679,9 @@ class FlagshipRuntime:
         return "Думаю..."
 
     def _handle_runtime_command(self, text: str) -> core.AssistantReply | None:
+        response = self.agent_controller.handle(text)
+        if response is not None:
+            return core.AssistantReply(response, should_speak=False)
         if core.contains_any(text, ("диагностика", "статус системы", "покажи статус", "покажи диагностику")):
             return core.AssistantReply(self._runtime_status_text())
 

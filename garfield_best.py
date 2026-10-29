@@ -84,6 +84,8 @@ class AppConfig:
     xai_api_key: str = ""
     enable_desktop_commands: bool = True
     allow_power_commands: bool = False
+    persist_history: bool = False
+    enable_schedules: bool = False
     input_mode: str = "auto"
     require_name_prefix: bool = False
     activation_mode: str = "wake_word"

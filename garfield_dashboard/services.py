@@ -294,6 +294,8 @@ class RuntimeAdapter:
         cfg.tts_enabled = bool(values["tts_enabled"])
         cfg.enable_desktop_commands = bool(values["enable_desktop_commands"])
         cfg.allow_power_commands = bool(values["allow_power_commands"])
+        cfg.persist_history = bool(values["persist_history"])
+        cfg.enable_schedules = bool(values["enable_schedules"])
         cfg.screen_hints_enabled = bool(values["screen_hints_enabled"])
         cfg.command_confirmation_timeout_sec = max(5, min(int(values["command_confirmation_timeout_sec"]), 120))
         cfg.confirm_phrases = [core.normalize_text(item) for item in str(values["confirm_phrases"]).split(",") if core.normalize_text(item)]

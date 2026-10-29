@@ -26,6 +26,8 @@ class SettingsPage(ctk.CTkFrame):
             "tts_enabled": tk.BooleanVar(),
             "enable_desktop_commands": tk.BooleanVar(),
             "allow_power_commands": tk.BooleanVar(),
+            "persist_history": tk.BooleanVar(),
+            "enable_schedules": tk.BooleanVar(),
             "screen_hints_enabled": tk.BooleanVar(),
             "command_confirmation_timeout_sec": tk.StringVar(),
             "confirm_phrases": tk.StringVar(),
@@ -84,6 +86,8 @@ class SettingsPage(ctk.CTkFrame):
         self._switch("Озвучка ответов", row, self.vars["tts_enabled"]); row += 1
         self._switch("Desktop-команды", row, self.vars["enable_desktop_commands"]); row += 1
         self._switch("Силовые команды", row, self.vars["allow_power_commands"]); row += 1
+        self._switch("Сохранять историю в SQLite", row, self.vars["persist_history"]); row += 1
+        self._switch("Расписание безопасных проверок", row, self.vars["enable_schedules"]); row += 1
         self._switch("Экранные подсказки", row, self.vars["screen_hints_enabled"]); row += 1
 
         row = self._section("Подтверждение команд", row)
@@ -183,6 +187,8 @@ class SettingsPage(ctk.CTkFrame):
             "tts_enabled": cfg.tts_enabled,
             "enable_desktop_commands": cfg.enable_desktop_commands,
             "allow_power_commands": cfg.allow_power_commands,
+            "persist_history": getattr(cfg, "persist_history", False),
+            "enable_schedules": getattr(cfg, "enable_schedules", False),
             "screen_hints_enabled": cfg.screen_hints_enabled,
             "command_confirmation_timeout_sec": str(cfg.command_confirmation_timeout_sec),
             "confirm_phrases": ", ".join(cfg.confirm_phrases),
