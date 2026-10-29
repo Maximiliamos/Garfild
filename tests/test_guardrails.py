@@ -29,7 +29,7 @@ class GuardrailTests(unittest.TestCase):
     def test_shell_execution_disabled(self):
         fn = method(CORE, "SkillRegistry", "execute")
         source = ast.unparse(fn)
-        self.assertNotIn("shell=True", source)
+        self.assertFalse(any(isinstance(n, ast.Call) and any(k.arg == "shell" and isinstance(k.value, ast.Constant) and k.value.value is True for k in n.keywords) for n in ast.walk(fn)))
         self.assertIn("PermissionError", source)
 
     def test_runtime_always_acknowledges_queued_command(self):
