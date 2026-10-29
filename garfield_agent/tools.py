@@ -6,6 +6,7 @@ import socket
 import platform
 import subprocess
 import webbrowser
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote_plus, urlsplit
@@ -26,6 +27,11 @@ class ToolRegistry:
         "system_status": ToolSpec("system_status", "Показать версию ОС", "read"),
         "list_files": ToolSpec("list_files", "Список файлов в выделенной рабочей папке", "read"),
         "read_file": ToolSpec("read_file", "Прочитать текстовый файл из рабочей папки", "read", ("path",)),
+        "create_folder": ToolSpec("create_folder", "Создать папку внутри GarfieldWorkspace", "write", ("path",)),
+        "write_file": ToolSpec("write_file", "Создать новый текстовый файл (без перезаписи)", "write", ("path", "text")),
+        "screenshot": ToolSpec("screenshot", "Сохранить скриншот в рабочей папке", "screen"),
+        "list_windows": ToolSpec("list_windows", "Показать окна Windows через UI Automation", "read"),
+        "focus_window": ToolSpec("focus_window", "Переключиться в окно по точному заголовку", "system", ("name",)),
         "recall_notes": ToolSpec("recall_notes", "Поиск личных заметок", "read"),
         "remember_note": ToolSpec("remember_note", "Сохранить заметку в локальной памяти", "write", ("text",)),
         "open_url": ToolSpec("open_url", "Открыть сайт в браузере", "external", ("url",)),
@@ -70,8 +76,13 @@ class ToolRegistry:
             self._validate_url(args["url"], strict=(tool == "browser_read"))
         if tool == "open_app" and args["name"].lower().strip() not in self.APPS:
             raise ValueError("Приложение отсутствует в белом списке")
-        if tool == "read_file":
+        if tool in {"read_file", "create_folder", "write_file"}:
             self._within_workspace(args["path"])
+        if tool == "write_file":
+            if Path(args["path"]).suffix.lower() not in {".txt", ".md", ".csv", ".json"}:
+                raise ValueError("Нельзя создавать исполняемые файлы")
+            if len(args["text"]) > 4000:
+                raise ValueError("Текст ограничен 4000 символами")
         return args
 
     @staticmethod
@@ -116,6 +127,43 @@ class ToolRegistry:
             if path.stat().st_size > 64_000:
                 raise ValueError("Файл слишком большой")
             return path.read_text(encoding="utf-8")[:8000]
+        if tool == "create_folder":
+            path = self._within_workspace(args["path"])
+            if path == self.workspace:
+                return "Рабочая папка уже существует"
+            path.mkdir(parents=True, exist_ok=True)
+            return "Папка создана: " + str(path)
+        if tool == "write_file":
+            path = self._within_workspace(args["path"])
+            path.parent.mkdir(parents=True, exist_ok=True)
+            # x = exclusive create; the agent cannot overwrite existing files.
+            with path.open("x", encoding="utf-8") as stream:
+                stream.write(args["text"])
+            return "Новый файл создан: " + str(path)
+        if tool == "screenshot":
+            try:
+                import pyautogui
+            except ImportError as error:
+                raise RuntimeError("Для скриншотов требуется pyautogui") from error
+            location = self.workspace / ("screenshot-" + uuid.uuid4().hex[:12] + ".png")
+            pyautogui.screenshot().save(location)
+            return "Скриншот сохранён локально: " + str(location)
+        if tool in {"list_windows", "focus_window"}:
+            if platform.system() != "Windows":
+                raise RuntimeError("UI Automation работает только в Windows")
+            try:
+                from pywinauto import Desktop
+            except ImportError as error:
+                raise RuntimeError("Установите pywinauto для управления окнами") from error
+            desktop = Desktop(backend="uia")
+            windows = [w for w in desktop.windows() if w.window_text().strip()]
+            if tool == "list_windows":
+                return "\n".join(w.window_text()[:150] for w in windows[:30]) or "Окна не найдены"
+            matches = [w for w in windows if w.window_text().strip().lower() == args["name"].strip().lower()]
+            if len(matches) != 1:
+                raise ValueError("Требуется ровно одно окно с указанным заголовком")
+            matches[0].set_focus()
+            return "Окно активировано"
         if tool == "recall_notes":
             return str(self.store.notes(args.get("query", ""), limit=10))
         if tool == "remember_note":

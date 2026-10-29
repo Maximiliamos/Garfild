@@ -58,6 +58,17 @@ class AgentTests(unittest.TestCase):
             self.tools.execute("read_file", {"path": str(outside)})
         self.assertRaises(ValueError, self.tools.execute, "open_app", {"name": "powershell"})
 
+    def test_workspace_creation_requires_new_files(self):
+        self.tools.validate("write_file", {"path": "notes/todo.txt", "text": "one"})
+        result = self.tools.execute("write_file", {"path": "notes/todo.txt", "text": "one"})
+        self.assertIn("Новый файл", result)
+        self.assertEqual((self.root / "workspace" / "notes" / "todo.txt").read_text(encoding="utf-8"), "one")
+        with self.assertRaises(FileExistsError):
+            self.tools.execute("write_file", {"path": "notes/todo.txt", "text": "two"})
+        with self.assertRaises(ValueError):
+            self.tools.validate("write_file", {"path": "run.exe", "text": "bad"})
+        self.assertIn("Папка создана", self.tools.execute("create_folder", {"path": "data"}))
+
     def test_public_browsing_only(self):
         for address in ("file:///etc/passwd", "http://127.0.0.1:8080", "https://localhost/a", "https://10.1.1.1/a"):
             with self.assertRaises(ValueError):
