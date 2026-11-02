@@ -37,6 +37,13 @@ class GuardrailTests(unittest.TestCase):
         finally_blocks = [n.finalbody for n in ast.walk(fn) if isinstance(n, ast.Try)]
         self.assertTrue(any("self.command_queue.task_done()" in ast.unparse(b) for b in finally_blocks))
 
+    def test_local_llm_disables_environment_proxy(self):
+        constructor = method(CORE, "LLMClient", "__init__")
+        source = ast.unparse(constructor)
+        self.assertIn("ollama", source)
+        self.assertIn("llamacpp", source)
+        self.assertIn("self.session.trust_env = False", source)
+
     def test_cache_key_includes_history_and_model(self):
         source = ast.unparse(method(CORE, "AssistantCore", "_ask_llm_or_fallback"))
         self.assertIn("self.history.as_messages()", source)
