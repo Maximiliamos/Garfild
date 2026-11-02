@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import closing
 import sqlite3
 import tempfile
 import threading
@@ -104,9 +105,12 @@ class ScheduleJournalTests(unittest.TestCase):
     def test_existing_database_migrates_detail_column(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "old.sqlite3"
-            with sqlite3.connect(path) as db:
+            # sqlite3.Connection context manager commits but does not close.
+            # Windows refuses to delete temporary DB files with open handles.
+            with closing(sqlite3.connect(path)) as db:
                 db.execute("CREATE TABLE scheduled_runs (workflow_id TEXT NOT NULL, run_key TEXT NOT NULL, claimed REAL NOT NULL, status TEXT NOT NULL, PRIMARY KEY (workflow_id, run_key))")
                 db.execute("INSERT INTO scheduled_runs(workflow_id, run_key, claimed, status) VALUES ('old', 'daily:2026-11-02:09:00', 1, 'claimed')")
+                db.commit()
             migrated = LocalStore(path)
             migrated.finish_scheduled_run("old", "daily:2026-11-02:09:00", False, "err")
             self.assertEqual(migrated.latest_scheduled_run("old")["detail"], "err")
