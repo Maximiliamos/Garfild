@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.parse import quote_plus, urlsplit
 
 from .storage import LocalStore
+from .mcp_client import LocalMCP
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,7 @@ class ToolRegistry:
         "web_search": ToolSpec("web_search", "Открыть браузер с поиском", "external", ("query",)),
         "open_app": ToolSpec("open_app", "Открыть приложение из разрешённого списка", "system", ("name",)),
         "browser_read": ToolSpec("browser_read", "Прочитать публичную HTTPS-страницу с Playwright", "network", ("url",)),
+        "mcp_call": ToolSpec("mcp_call", "Выполнить разрешённый инструмент локального MCP-сервера", "external", ("server", "tool", "arguments")),
     }
     APPS = {
         "калькулятор": ["calc.exe"],
@@ -48,10 +50,11 @@ class ToolRegistry:
         "explorer": ["explorer.exe"],
     }
 
-    def __init__(self, workspace: Path, store: LocalStore):
+    def __init__(self, workspace: Path, store: LocalStore, mcp_config: Path | None = None):
         self.workspace = Path(workspace).expanduser().resolve()
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.store = store
+        self.mcp = LocalMCP(mcp_config or (self.workspace / "mcp_servers.json"))
 
     def catalogue(self) -> list[dict]:
         return [
@@ -68,7 +71,7 @@ class ToolRegistry:
         for key in spec.required:
             if not isinstance(args.get(key), str) or not args[key].strip():
                 raise ValueError(f"Не указан обязательный параметр {key}")
-        if set(args) - (set(spec.required) | {"path", "query", "name", "url", "text"}):
+        if set(args) - (set(spec.required) | {"path", "query", "name", "url", "text", "server", "tool", "arguments"}):
             raise ValueError("Неизвестные аргументы инструмента")
         if any(not isinstance(value, str) or len(value) > 4000 for value in args.values()):
             raise ValueError("Неверная длина или тип аргумента")
@@ -78,6 +81,16 @@ class ToolRegistry:
             raise ValueError("Приложение отсутствует в белом списке")
         if tool in {"read_file", "create_folder", "write_file"}:
             self._within_workspace(args["path"])
+        if tool == "mcp_call":
+            try:
+                parameters = __import__("json").loads(args["arguments"])
+            except (ValueError, TypeError) as error:
+                raise ValueError("MCP arguments должны быть JSON-объектом") from error
+            if not isinstance(parameters, dict):
+                raise ValueError("MCP arguments должны быть JSON-объектом")
+            catalog = self.mcp.servers()
+            if args["server"] not in catalog or args["tool"] not in catalog[args["server"]]["allowed_tools"]:
+                raise PermissionError("MCP-инструмент не разрешён")
         if tool == "write_file":
             if Path(args["path"]).suffix.lower() not in {".txt", ".md", ".csv", ".json"}:
                 raise ValueError("Нельзя создавать исполняемые файлы")
@@ -113,6 +126,8 @@ class ToolRegistry:
 
     def execute(self, tool: str, args: dict) -> str:
         self.validate(tool, args)
+        if tool == "mcp_call":
+            return self.mcp.call(args["server"], args["tool"], __import__("json").loads(args["arguments"]))
         if tool == "system_status":
             return platform.platform()
         if tool == "list_files":
