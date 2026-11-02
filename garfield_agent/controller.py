@@ -43,6 +43,8 @@ class AgentController:
             if lower.startswith(("агент ", "составь план ")):
                 start = 6 if lower.startswith("агент ") else 13
                 return self.runner.propose(text[start:])
+            if lower in {"исправь план", "предложи исправление", "перепланируй"}:
+                return self.runner.propose_repair()
             if lower in {"подтверди план", "выполни план"}:
                 return self.runner.confirm()
             if lower in {"отмени план", "отмена плана"}:

@@ -131,6 +131,7 @@ class WorkflowLibrary:
         self.path = Path(path)
         self.runner = runner
         self._last_run_date: dict[str, str] = {}
+        self._observed_files: dict[str, bool] = {}
 
     def all(self) -> list[dict]:
         if not self.path.exists():
@@ -151,7 +152,14 @@ class WorkflowLibrary:
             schedule = flow.get("daily_at")
             if schedule is not None and not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", str(schedule)):
                 raise ValueError("daily_at должен быть в формате HH:MM")
-            result.append({"id": identifier, "name": str(flow.get("name", identifier))[:80], "steps": steps, "daily_at": schedule})
+            watched = flow.get("when_file_created")
+            if watched is not None:
+                if not isinstance(watched, str) or not watched.strip():
+                    raise ValueError("when_file_created должен указывать путь к файлу")
+                self.runner.tools._within_workspace(watched)
+                if schedule:
+                    raise ValueError("Выберите одно условие запуска: время или новый файл")
+            result.append({"id": identifier, "name": str(flow.get("name", identifier))[:80], "steps": steps, "daily_at": schedule, "when_file_created": watched})
         return result
 
     def names(self) -> str:
@@ -171,9 +179,18 @@ class WorkflowLibrary:
         clock = now.strftime("%H:%M")
         jobs = []
         for flow in self.all():
-            if flow["daily_at"] != clock or self._last_run_date.get(flow["id"]) == date_key:
-                continue
-            self._last_run_date[flow["id"]] = date_key
-            if all(self.runner.tools.SPECS[step["tool"]].risk == "read" for step in flow["steps"]):
+            triggered = False
+            if flow["daily_at"] == clock and self._last_run_date.get(flow["id"]) != date_key:
+                self._last_run_date[flow["id"]] = date_key
+                triggered = True
+            watched = flow["when_file_created"]
+            if watched:
+                path = self.runner.tools._within_workspace(watched)
+                exists = path.is_file()
+                previous = self._observed_files.get(flow["id"])
+                self._observed_files[flow["id"]] = exists
+                if previous is False and exists:
+                    triggered = True
+            if triggered and all(self.runner.tools.SPECS[step["tool"]].risk == "read" for step in flow["steps"]):
                 jobs.append((flow["name"], flow["steps"]))
         return jobs

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import socket
 import platform
 import subprocess
@@ -71,8 +72,9 @@ class ToolRegistry:
         for key in spec.required:
             if not isinstance(args.get(key), str) or not args[key].strip():
                 raise ValueError(f"Не указан обязательный параметр {key}")
-        if set(args) - (set(spec.required) | {"path", "query", "name", "url", "text", "server", "tool", "arguments"}):
-            raise ValueError("Неизвестные аргументы инструмента")
+        optional = {"list_files": {"path"}, "recall_notes": {"query"}}
+        if set(args) - (set(spec.required) | optional.get(tool, set())):
+            raise ValueError("Неожиданные аргументы инструмента")
         if any(not isinstance(value, str) or len(value) > 4000 for value in args.values()):
             raise ValueError("Неверная длина или тип аргумента")
         if tool in {"open_url", "browser_read"}:
@@ -83,7 +85,7 @@ class ToolRegistry:
             self._within_workspace(args["path"])
         if tool == "mcp_call":
             try:
-                parameters = __import__("json").loads(args["arguments"])
+                parameters = json.loads(args["arguments"])
             except (ValueError, TypeError) as error:
                 raise ValueError("MCP arguments должны быть JSON-объектом") from error
             if not isinstance(parameters, dict):
@@ -127,7 +129,7 @@ class ToolRegistry:
     def execute(self, tool: str, args: dict) -> str:
         self.validate(tool, args)
         if tool == "mcp_call":
-            return self.mcp.call(args["server"], args["tool"], __import__("json").loads(args["arguments"]))
+            return self.mcp.call(args["server"], args["tool"], json.loads(args["arguments"]))
         if tool == "system_status":
             return platform.platform()
         if tool == "list_files":
