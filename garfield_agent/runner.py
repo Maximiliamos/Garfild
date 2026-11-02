@@ -30,6 +30,14 @@ class PendingPlan:
     created: float
 
 
+@dataclass(frozen=True)
+class ScheduledJob:
+    flow_id: str
+    label: str
+    steps: list[dict]
+    run_key: str | None = None
+
+
 class PlanRunner:
     def __init__(self, tools: ToolRegistry, store: LocalStore, llm_getter: Callable[[], Any], stop_event: threading.Event | None = None):
         self.tools = tools
@@ -39,6 +47,8 @@ class PlanRunner:
         self.pending: PendingPlan | None = None
         self.last_failure: dict[str, str] | None = None
         self._repair_used = False
+        self._state_lock = threading.RLock()
+        self._executing = False
 
     def validate_steps(self, steps: Any) -> list[dict]:
         if not isinstance(steps, list) or not 1 <= len(steps) <= MAX_STEPS:
@@ -56,7 +66,10 @@ class PlanRunner:
 
     def preview(self, label: str, steps: list[dict]) -> str:
         clean = self.validate_steps(steps)
-        self.pending = PendingPlan(label, clean, time.monotonic())
+        with self._state_lock:
+            if self._executing:
+                raise RuntimeError("Нельзя заменить план, пока выполняется предыдущий.")
+            self.pending = PendingPlan(label, clean, time.monotonic())
         lines = [f"План «{label}» ({len(clean)} шагов):"]
         for index, item in enumerate(clean, 1):
             spec = self.tools.SPECS[item["tool"]]
@@ -66,15 +79,21 @@ class PlanRunner:
         return "\n".join(lines)
 
     def propose(self, task: str) -> str:
-        self.last_failure = None
-        self._repair_used = False
+        with self._state_lock:
+            if self._executing:
+                raise RuntimeError("Дождитесь завершения выполняемого плана.")
+            self.last_failure = None
+            self._repair_used = False
         return self._create_plan(task)
 
     def propose_repair(self) -> str:
-        failure = self.last_failure
-        if not failure or self._repair_used:
-            return "Нет ошибки для перепланирования или попытка уже использована."
-        self._repair_used = True
+        with self._state_lock:
+            if self._executing:
+                return "Нельзя перепланировать во время выполнения."
+            failure = self.last_failure
+            if not failure or self._repair_used:
+                return "Нет ошибки для перепланирования или попытка уже использована."
+            self._repair_used = True
         # Only the failed step and future steps may be proposed again;
         # completed steps are never retried as part of this repair.
         task = (
@@ -86,7 +105,8 @@ class PlanRunner:
         try:
             return self._create_plan(task)
         except Exception:
-            self._repair_used = False
+            with self._state_lock:
+                self._repair_used = False
             raise
 
     def _create_plan(self, task: str) -> str:
@@ -132,13 +152,24 @@ class PlanRunner:
         return "Новый файл удалён"
 
     def confirm(self) -> str:
-        pending = self.pending
-        self.pending = None
-        if pending is None:
-            return "Нет ожидающего подтверждения плана."
-        if time.monotonic() - pending.created > 120:
-            return "План устарел и отменён. Создайте его заново."
-        steps = self.validate_steps(pending.steps)  # validate again at execution
+        with self._state_lock:
+            if self._executing:
+                return "План уже выполняется; повторное подтверждение отклонено."
+            pending = self.pending
+            self.pending = None
+            if pending is None:
+                return "Нет ожидающего подтверждения плана."
+            if time.monotonic() - pending.created > 120:
+                return "План устарел и отменён. Создайте его заново."
+            self._executing = True
+        try:
+            return self._execute_claimed_plan(pending)
+        finally:
+            with self._state_lock:
+                self._executing = False
+
+    def _execute_claimed_plan(self, pending: PendingPlan) -> str:
+        steps = self.validate_steps(pending.steps)
         result = []
         undo: list[tuple[str, Path, str]] = []
         self.last_failure = None
@@ -181,7 +212,10 @@ class PlanRunner:
         return "\n".join(lines)
 
     def cancel(self) -> str:
-        self.pending = None
+        with self._state_lock:
+            self.pending = None
+            if self._executing:
+                return "Ожидающий план отменён. Уже выполняющееся действие не прерывается."
         return "План отменён."
 
 
@@ -191,7 +225,6 @@ class WorkflowLibrary:
     def __init__(self, path: Path, runner: PlanRunner):
         self.path = Path(path)
         self.runner = runner
-        self._last_run_date: dict[str, str] = {}
         self._observed_files: dict[str, bool] = {}
 
     def all(self) -> list[dict]:
@@ -233,17 +266,27 @@ class WorkflowLibrary:
                 return self.runner.preview(flow["name"], flow["steps"])
         raise ValueError("Сценарий не найден: " + identifier)
 
-    def due_read_only(self, now: datetime | None = None) -> list[tuple[str, list[dict]]]:
-        """Scheduled jobs can run ONLY read-only tools; others require manual confirmation."""
+    def due_read_only(self, now: datetime | None = None) -> list[ScheduledJob]:
+        """Claim allowed daily jobs in SQLite before returning them.
+
+        Daily jobs run at most once per date even after restarting Garfield.
+        Claims made before a crash are NOT retried automatically. File creation
+        events still use in-memory edge detection and are not durable.
+        """
         now = now or datetime.now()
         date_key = now.strftime("%Y-%m-%d")
         clock = now.strftime("%H:%M")
-        jobs = []
+        jobs: list[ScheduledJob] = []
         for flow in self.all():
-            triggered = False
-            if flow["daily_at"] == clock and self._last_run_date.get(flow["id"]) != date_key:
-                self._last_run_date[flow["id"]] = date_key
-                triggered = True
+            if not all(step["tool"] in self.runner.tools.UNATTENDED_SAFE
+                       for step in flow["steps"]):
+                continue
+            run_key: str | None = None
+            if flow["daily_at"] == clock:
+                candidate = f"daily:{date_key}:{clock}"
+                if self.runner.store.claim_scheduled_run(flow["id"], candidate):
+                    run_key = candidate
+                    jobs.append(ScheduledJob(flow["id"], flow["name"], flow["steps"], run_key))
             watched = flow["when_file_created"]
             if watched:
                 path = self.runner.tools._within_workspace(watched)
@@ -251,7 +294,5 @@ class WorkflowLibrary:
                 previous = self._observed_files.get(flow["id"])
                 self._observed_files[flow["id"]] = exists
                 if previous is False and exists:
-                    triggered = True
-            if triggered and all(self.runner.tools.SPECS[step["tool"]].risk == "read" for step in flow["steps"]):
-                jobs.append((flow["name"], flow["steps"]))
+                    jobs.append(ScheduledJob(flow["id"], flow["name"], flow["steps"]))
         return jobs

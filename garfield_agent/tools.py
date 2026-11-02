@@ -25,6 +25,9 @@ class ToolSpec:
 
 
 class ToolRegistry:
+    # Background scheduling is deliberately narrower than the list of
+    # tools marked read-only. Notes/files may contain sensitive information.
+    UNATTENDED_SAFE = frozenset({"system_status"})
     SPECS = {
         "system_status": ToolSpec("system_status", "Показать версию ОС", "read"),
         "list_files": ToolSpec("list_files", "Список файлов в выделенной рабочей папке", "read"),
