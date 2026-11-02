@@ -85,7 +85,7 @@ class UpdateManager:
         if self._git("rev-parse", "FETCH_HEAD") != original_target:
             return "Удалённая версия изменилась: проверьте обновления заново."
         self._git("merge", "--ff-only", "FETCH_HEAD")
-        return "Код обновлён без перезаписи локальных изменений. Полностью закройте и запустите Garfield заново."
+        return "Код обновлён без перезаписи локальных изменений. После закрытия программы перезапустите Garfield."
 
     def cancel(self) -> str:
         self.pending_sha = None

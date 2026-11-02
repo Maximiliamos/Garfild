@@ -19,9 +19,8 @@ NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 class LocalMCP:
     def __init__(self, config: Path, session=None):
         self.config = Path(config)
-        if session is None:
-            import requests
-            session = requests.Session()
+        # Do not import the HTTP dependency until a server is actually called.
+        # Offline tests and local skills must work without requests installed.
         self.session = session
 
     def servers(self) -> dict[str, dict]:
@@ -66,6 +65,9 @@ class LocalMCP:
         return response.json()
 
     def _post(self, endpoint: str, payload: dict, session_id: str | None = None):
+        if self.session is None:
+            import requests
+            self.session = requests.Session()
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
