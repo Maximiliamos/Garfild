@@ -6,6 +6,7 @@ The model may propose a strictly validated plan; execution requires explicit con
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import re
 import threading
@@ -36,6 +37,8 @@ class PlanRunner:
         self.llm_getter = llm_getter
         self.stop_event = stop_event or threading.Event()
         self.pending: PendingPlan | None = None
+        self.last_failure: dict[str, str] | None = None
+        self._repair_used = False
 
     def validate_steps(self, steps: Any) -> list[dict]:
         if not isinstance(steps, list) or not 1 <= len(steps) <= MAX_STEPS:
@@ -63,6 +66,30 @@ class PlanRunner:
         return "\n".join(lines)
 
     def propose(self, task: str) -> str:
+        self.last_failure = None
+        self._repair_used = False
+        return self._create_plan(task)
+
+    def propose_repair(self) -> str:
+        failure = self.last_failure
+        if not failure or self._repair_used:
+            return "Нет ошибки для перепланирования или попытка уже использована."
+        self._repair_used = True
+        # Only the failed step and future steps may be proposed again;
+        # completed steps are never retried as part of this repair.
+        task = (
+            f"Изначальная задача: {failure['label']}. "
+            f"Ошибка на шаге: {failure['tool']}, сообщение: {failure['error']}. "
+            "Предложи альтернативные действия только для невыполненного остатка. "
+            "Уже завершённые шаги повторять нельзя."
+        )
+        try:
+            return self._create_plan(task)
+        except Exception:
+            self._repair_used = False
+            raise
+
+    def _create_plan(self, task: str) -> str:
         task = task.strip()
         if not 4 <= len(task) <= 800:
             raise ValueError("Опишите задачу длиной от 4 до 800 символов")
@@ -94,6 +121,16 @@ class PlanRunner:
             raise ValueError(str(data.get("error", "Модель не составила план"))[:300] if isinstance(data, dict) else "Неверный план")
         return self.preview(task, data.get("steps"))
 
+    @staticmethod
+    def _rollback_file(path: Path, fingerprint: str) -> str:
+        # Never delete anything that has been changed or replaced since we made it.
+        if not path.is_file() or path.is_symlink():
+            return "Пропущено: файл уже отсутствует или заменён"
+        if hashlib.sha256(path.read_bytes()).hexdigest() != fingerprint:
+            return "Пропущено: файл изменился"
+        path.unlink()
+        return "Новый файл удалён"
+
     def confirm(self) -> str:
         pending = self.pending
         self.pending = None
@@ -103,16 +140,40 @@ class PlanRunner:
             return "План устарел и отменён. Создайте его заново."
         steps = self.validate_steps(pending.steps)  # validate again at execution
         result = []
+        undo: list[tuple[str, Path, str]] = []
+        self.last_failure = None
         for index, item in enumerate(steps, 1):
             if self.stop_event.is_set():
                 result.append({"step": index, "status": "cancelled"})
                 break
             try:
-                message = self.tools.execute(item["tool"], item["args"])
+                name, args = item["tool"], item["args"]
+                created_path = None
+                if name in {"write_file", "create_folder"}:
+                    target = self.tools._within_workspace(args["path"])
+                    if not target.exists():
+                        created_path = target
+                message = self.tools.execute(name, args)
+                if created_path is not None and created_path.exists():
+                    if name == "write_file":
+                        undo.append(("file", created_path, hashlib.sha256(created_path.read_bytes()).hexdigest()))
+                    elif name == "create_folder":
+                        undo.append(("directory", created_path, ""))
                 result.append({"step": index, "status": "ok", "message": str(message)[:1000]})
             except Exception as error:
                 logging.exception("Ошибка шага %s", index)
                 result.append({"step": index, "status": "error", "message": str(error)[:300]})
+                self.last_failure = {"label": pending.label, "tool": item["tool"], "error": str(error)[:200]}
+                for kind, path, fingerprint in reversed(undo):
+                    try:
+                        if kind == "file":
+                            detail = self._rollback_file(path, fingerprint)
+                        else:
+                            path.rmdir()  # Only if still empty; never recursive
+                            detail = "Созданная пустая папка удалена"
+                    except OSError as rollback_error:
+                        detail = f"Откат пропущен: {rollback_error}"
+                    result.append({"step": index, "status": "rollback", "message": detail[:220]})
                 break
         self.store.record_run(steps, result)
         lines = [f"План «{pending.label}»:"]
