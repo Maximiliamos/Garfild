@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -36,11 +37,36 @@ class AgentController:
         self.updater = UpdateManager(project_dir)
         self.models = ModelManager()
         self.workflows = WorkflowLibrary(Path(project_dir) / "garfield_workflows.json", self.runner)
+        self._pending_clear: tuple[str, float] | None = None
+        self._privacy_lock = threading.Lock()
 
     def handle(self, command: str) -> str | None:
         text = " ".join(command.strip().split())
         lower = text.lower()
         try:
+            if lower in {"удали сохраненную историю", "удали сохранённую историю"}:
+                with self._privacy_lock:
+                    self._pending_clear = ("history", time.monotonic())
+                return "Будут удалены все сохранённые диалоги из SQLite. Для продолжения в течение 120 секунд введите «подтверди удаление истории». Для отказа — «отмени удаление»."
+            if lower == "удали все заметки":
+                with self._privacy_lock:
+                    self._pending_clear = ("notes", time.monotonic())
+                return "Будут удалены все личные заметки из SQLite. Для продолжения в течение 120 секунд введите «подтверди удаление заметок». Для отказа — «отмени удаление»."
+            if lower == "отмени удаление":
+                with self._privacy_lock:
+                    self._pending_clear = None
+                return "Удаление отменено."
+            if lower in {"подтверди удаление истории", "подтверди удаление заметок"}:
+                choice = "history" if lower.endswith("истории") else "notes"
+                with self._privacy_lock:
+                    pending = self._pending_clear
+                    self._pending_clear = None
+                    authorized = bool(pending and pending[0] == choice and time.monotonic() - pending[1] <= 120)
+                    if not authorized:
+                        return "Нет действительного запроса на удаление. Повторите команду подготовки."
+                    count = (self.store.clear_saved_history() if choice == "history"
+                             else self.store.clear_all_notes())
+                return f"Удалено локальных записей: {count}. Старые экспортированные файлы и резервные копии не затронуты."
             if lower in {"посмотри на экран", "что на экране", "опиши экран"} or lower.startswith("посмотри на экран и "):
                 task = text[len("посмотри на экран и "):] if lower.startswith("посмотри на экран и ") else "Опиши, что видно на экране по-русски."
                 return analyze_screen(task, model=os.getenv("GARFIELD_VISION_MODEL", "llava:7b"))

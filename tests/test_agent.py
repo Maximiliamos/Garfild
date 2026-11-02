@@ -147,6 +147,30 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(len(workflows.due_read_only()), 1)
         self.assertEqual(workflows.due_read_only(), [])
 
+    def test_opt_in_sqlite_history_deletion_requires_confirmation(self):
+        controller = AgentController(self.root, lambda: None, threading.Event(),
+                                     self.root / "private-data", self.root / "workspace2")
+        controller.store.add_message("user", "личная переписка")
+        self.assertIn("Нет действительного", controller.handle("подтверди удаление истории"))
+        self.assertEqual(len(controller.store.search_messages("личная")), 1)
+        self.assertIn("Для продолжения", controller.handle("удали сохранённую историю"))
+        self.assertIn("отменено", controller.handle("отмени удаление"))
+        self.assertEqual(len(controller.store.search_messages("личная")), 1)
+        controller.handle("удали сохраненную историю")
+        self.assertIn("Удалено локальных записей: 1", controller.handle("подтверди удаление истории"))
+        self.assertEqual(controller.store.search_messages("личная"), [])
+
+    def test_all_notes_deletion_is_separate_and_confirmed(self):
+        controller = AgentController(self.root, lambda: None, threading.Event(),
+                                     self.root / "private-data2", self.root / "workspace3")
+        controller.store.add_note("заметка секрет")
+        controller.store.add_message("user", "разговор")
+        self.assertIn("Нет действительного", controller.handle("подтверди удаление заметок"))
+        controller.handle("удали все заметки")
+        self.assertIn("Удалено локальных записей: 1", controller.handle("подтверди удаление заметок"))
+        self.assertEqual(controller.store.notes(), [])
+        self.assertEqual(len(controller.store.search_messages("разговор")), 1)
+
     def test_commands_recall_and_delete(self):
         controller = AgentController(self.root, lambda: None, threading.Event(), self.root / "db2", self.root / "workspace2")
         reply = controller.handle("запомни купить хлеб")
