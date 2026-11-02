@@ -5,6 +5,7 @@ import json
 import os
 import tempfile
 import tkinter as tk
+from datetime import datetime
 from pathlib import Path
 
 import customtkinter as ctk
@@ -27,7 +28,7 @@ class AutomationPage(ctk.CTkFrame):
         tabs = ctk.CTkTabview(self, fg_color=COLORS["surface"])
         tabs.grid(row=0, column=0, sticky="nsew")
         self.tabs = tabs
-        for name in ("ИИ-агент", "Сценарии", "Память"):
+        for name in ("ИИ-агент", "Сценарии", "Память", "Журнал"):
             tabs.add(name)
             tabs.tab(name).grid_columnconfigure(0, weight=1)
 
@@ -78,8 +79,35 @@ class AutomationPage(ctk.CTkFrame):
         self.notes_output = ctk.CTkTextbox(memory_tab, font=FONTS["body"], fg_color=COLORS["input"])
         self.notes_output.grid(row=3, column=0, sticky="nsew", padx=16, pady=(0, 12))
         memory_tab.grid_rowconfigure(3, weight=1)
+
+        log_tab = tabs.tab("Журнал")
+        ctk.CTkLabel(
+            log_tab,
+            text="Последние фоновые запуски. Повтор выполняется только после подтверждения плана.",
+            font=FONTS["body"], text_color=COLORS["text_secondary"], anchor="w",
+        ).grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 8))
+        log_actions = ctk.CTkFrame(log_tab, fg_color="transparent")
+        log_actions.grid(row=1, column=0, sticky="ew", padx=16, pady=8)
+        self.failed_flow_id = tk.StringVar()
+        ctk.CTkEntry(
+            log_actions, textvariable=self.failed_flow_id, width=220,
+            placeholder_text="ID неуспешного сценария"
+        ).grid(row=0, column=0, padx=(0, 8))
+        action_button(
+            log_actions, "Показать план повтора", self.retry_failed_flow, width=190
+        ).grid(row=0, column=1, padx=(0, 8))
+        action_button(
+            log_actions, "Обновить журнал", self.show_runs, width=150, tone="ghost"
+        ).grid(row=0, column=2)
+        self.runs_output = ctk.CTkTextbox(
+            log_tab, font=FONTS["mono"], fg_color=COLORS["input"], wrap="word"
+        )
+        self.runs_output.grid(row=2, column=0, sticky="nsew", padx=16, pady=(0, 12))
+        log_tab.grid_rowconfigure(2, weight=1)
+
         self.load_flows()
         self.show_notes()
+        self.show_runs()
 
     @staticmethod
     def _set_text(widget, text: str):
@@ -112,6 +140,27 @@ class AutomationPage(ctk.CTkFrame):
         if identifier:
             self._run("запусти сценарий " + identifier)
             self.tabs.set("ИИ-агент")
+
+    def retry_failed_flow(self) -> None:
+        identifier = self.failed_flow_id.get().strip()
+        if not identifier:
+            self.app.show_notice("Введите ID сценария из журнала", "warning")
+            return
+        self._run("повтори неудачный сценарий " + identifier)
+        self.tabs.set("ИИ-агент")
+
+    def show_runs(self) -> None:
+        try:
+            rows = self.agent.store.list_scheduled_runs(limit=100)
+            records = [
+                f"{datetime.fromtimestamp(item['claimed']).strftime('%Y-%m-%d %H:%M:%S')} "
+                f"| {item['workflow_id']} | {item['status']} "
+                f"| {item['run_key']}\n  {item['detail'][:200]}"
+                for item in rows
+            ]
+            self._set_text(self.runs_output, "\n\n".join(records) or "Запусков пока не было.")
+        except Exception as error:
+            self._set_text(self.runs_output, f"Не удалось прочитать журнал: {error}")
 
     def load_flows(self) -> None:
         path = self.agent.workflows.path
@@ -187,3 +236,4 @@ class AutomationPage(ctk.CTkFrame):
 
     def on_show(self) -> None:
         self.show_notes()
+        self.show_runs()

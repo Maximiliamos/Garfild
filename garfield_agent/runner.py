@@ -266,6 +266,23 @@ class WorkflowLibrary:
                 return self.runner.preview(flow["name"], flow["steps"])
         raise ValueError("Сценарий не найден: " + identifier)
 
+    def retry_failed_preview(self, identifier: str) -> str:
+        """Manual, confirmed replay of the current workflow definition.
+
+        Does not reset the original scheduled run or automatically execute.
+        """
+        latest = self.runner.store.latest_scheduled_run(identifier)
+        if latest is None or latest["status"] != "failed":
+            raise ValueError("Нет последнего неуспешного фонового запуска для этого сценария")
+        flow = next((item for item in self.all() if item["id"] == identifier), None)
+        if flow is None:
+            raise ValueError("Сценарий удалён или отсутствует в конфигурации")
+        return (
+            "Ручной повтор сценария после ошибки. "
+            "Будет использована ТЕКУЩАЯ версия шагов, а не историческая.\n"
+            + self.runner.preview(flow["name"], flow["steps"])
+        )
+
     def due_read_only(self, now: datetime | None = None) -> list[ScheduledJob]:
         """Claim allowed daily jobs in SQLite before returning them.
 
@@ -294,5 +311,6 @@ class WorkflowLibrary:
                 previous = self._observed_files.get(flow["id"])
                 self._observed_files[flow["id"]] = exists
                 if previous is False and exists:
-                    jobs.append(ScheduledJob(flow["id"], flow["name"], flow["steps"]))
+                    event_key = self.runner.store.claim_file_event_run(flow["id"])
+                    jobs.append(ScheduledJob(flow["id"], flow["name"], flow["steps"], event_key))
         return jobs

@@ -51,9 +51,14 @@ class LocalStore:
                     run_key TEXT NOT NULL,
                     claimed REAL NOT NULL,
                     status TEXT NOT NULL,
+                    detail TEXT NOT NULL DEFAULT '',
                     PRIMARY KEY (workflow_id, run_key)
                 );
             """)
+            # Existing installations predate the optional detail column.
+            columns = {row[1] for row in db.execute("PRAGMA table_info(scheduled_runs)")}
+            if "detail" not in columns:
+                db.execute("ALTER TABLE scheduled_runs ADD COLUMN detail TEXT NOT NULL DEFAULT ''")
         if self.encrypt_at_rest:
             self._migrate_legacy()
 
@@ -181,14 +186,65 @@ class LocalStore:
             )
             return cursor.rowcount == 1
 
-    def finish_scheduled_run(self, workflow_id: str, run_key: str, success: bool) -> None:
+    def claim_file_event_run(self, workflow_id: str) -> str:
+        """Journal a detected file event; detection itself remains in-memory."""
+        import uuid
+
+        if not workflow_id or len(workflow_id) > 40:
+            raise ValueError("Invalid workflow identifier")
+        run_key = "file:" + uuid.uuid4().hex
+        with self._lock, self._connect() as db:
+            db.execute(
+                "INSERT INTO scheduled_runs(workflow_id, run_key, claimed, status) "
+                "VALUES (?, ?, ?, 'claimed')",
+                (workflow_id, run_key, time.time()),
+            )
+        return run_key
+
+    def finish_scheduled_run(
+        self, workflow_id: str, run_key: str, success: bool, detail: str = ""
+    ) -> None:
         with self._lock, self._connect() as db:
             updated = db.execute(
-                "UPDATE scheduled_runs SET status = ? WHERE workflow_id = ? AND run_key = ?",
-                ("succeeded" if success else "failed", workflow_id, run_key),
+                "UPDATE scheduled_runs SET status = ?, detail = ? "
+                "WHERE workflow_id = ? AND run_key = ? AND status = 'claimed'",
+                ("succeeded" if success else "failed", self._seal(detail[:500]), workflow_id, run_key),
             )
             if updated.rowcount != 1:
-                raise ValueError("Unknown scheduled run")
+                raise ValueError("Unknown or already completed scheduled run")
+
+    def list_scheduled_runs(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Return newest scheduled jobs; their text detail is DPAPI protected."""
+        limit = max(1, min(int(limit), 200))
+        with self._lock, self._connect() as db:
+            rows = db.execute(
+                "SELECT workflow_id, run_key, claimed, status, detail "
+                "FROM scheduled_runs ORDER BY claimed DESC, rowid DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [
+            {
+                "workflow_id": workflow_id, "run_key": run_key,
+                "claimed": float(claimed), "status": status,
+                "detail": self._unseal(detail),
+            }
+            for workflow_id, run_key, claimed, status, detail in rows
+        ]
+
+    def latest_scheduled_run(self, workflow_id: str) -> dict[str, Any] | None:
+        with self._lock, self._connect() as db:
+            row = db.execute(
+                "SELECT workflow_id, run_key, claimed, status, detail "
+                "FROM scheduled_runs WHERE workflow_id = ? "
+                "ORDER BY claimed DESC, rowid DESC LIMIT 1",
+                (workflow_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "workflow_id": row[0], "run_key": row[1], "claimed": float(row[2]),
+            "status": row[3], "detail": self._unseal(row[4]),
+        }
 
     def scheduled_run_status(self, workflow_id: str, run_key: str) -> str | None:
         with self._lock, self._connect() as db:
