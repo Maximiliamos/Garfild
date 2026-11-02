@@ -65,7 +65,7 @@ class AutomationPage(ctk.CTkFrame):
         action_button(footer, "Конструктор", self.open_builder, width=130).grid(row=0, column=4, padx=(8, 0))
 
         memory_tab = tabs.tab("Память")
-        ctk.CTkLabel(memory_tab, text="Заметки хранятся локально. Данные не шифруются.",
+        ctk.CTkLabel(memory_tab, text="Заметки: Windows DPAPI, другие ОС — без шифрования.",
                      text_color=COLORS["text_secondary"], font=FONTS["body"], anchor="w").grid(row=0, column=0, sticky="w", padx=16, pady=(14, 8))
         self.note_input = tk.StringVar()
         ctk.CTkEntry(memory_tab, textvariable=self.note_input, placeholder_text="Новая заметка").grid(row=1, column=0, sticky="ew", padx=16)
@@ -99,11 +99,49 @@ class AutomationPage(ctk.CTkFrame):
         action_button(
             log_actions, "Обновить журнал", self.show_runs, width=150, tone="ghost"
         ).grid(row=0, column=2)
+        filters = ctk.CTkFrame(log_tab, fg_color="transparent")
+        filters.grid(row=2, column=0, sticky="ew", padx=16, pady=5)
+        self.run_status_filter = tk.StringVar(value="Все")
+        self.run_workflow_filter = tk.StringVar()
+        self.run_page = 0
+        self.run_page_size = 25
+        ctk.CTkOptionMenu(
+            filters, variable=self.run_status_filter,
+            values=["Все", "Ожидает", "Успешно", "Ошибка"],
+            command=lambda _value: self.reset_run_page(),
+            width=135,
+        ).grid(row=0, column=0, padx=(0, 8))
+        ctk.CTkEntry(
+            filters, textvariable=self.run_workflow_filter, width=220,
+            placeholder_text="Фильтр по ID сценария",
+        ).grid(row=0, column=1, padx=(0, 8))
+        action_button(
+            filters, "Применить фильтр", self.reset_run_page, width=145
+        ).grid(row=0, column=2)
+
+        pagination = ctk.CTkFrame(log_tab, fg_color="transparent")
+        pagination.grid(row=3, column=0, sticky="ew", padx=16, pady=(3, 9))
+        self.prev_run_page_button = action_button(
+            pagination, "Предыдущие", lambda: self.change_run_page(-1),
+            tone="ghost", width=125,
+        )
+        self.prev_run_page_button.grid(row=0, column=0, padx=(0, 10))
+        self.run_page_label = tk.StringVar(value="Страница 1")
+        ctk.CTkLabel(
+            pagination, textvariable=self.run_page_label,
+            text_color=COLORS["text_secondary"], font=FONTS["body"]
+        ).grid(row=0, column=1)
+        self.next_run_page_button = action_button(
+            pagination, "Следующие", lambda: self.change_run_page(1),
+            tone="ghost", width=125,
+        )
+        self.next_run_page_button.grid(row=0, column=2, padx=(10, 0))
+
         self.runs_output = ctk.CTkTextbox(
             log_tab, font=FONTS["mono"], fg_color=COLORS["input"], wrap="word"
         )
-        self.runs_output.grid(row=2, column=0, sticky="nsew", padx=16, pady=(0, 12))
-        log_tab.grid_rowconfigure(2, weight=1)
+        self.runs_output.grid(row=4, column=0, sticky="nsew", padx=16, pady=(0, 12))
+        log_tab.grid_rowconfigure(4, weight=1)
 
         self.load_flows()
         self.show_notes()
@@ -149,16 +187,48 @@ class AutomationPage(ctk.CTkFrame):
         self._run("повтори неудачный сценарий " + identifier)
         self.tabs.set("ИИ-агент")
 
+    def reset_run_page(self) -> None:
+        self.run_page = 0
+        self.show_runs()
+
+    def change_run_page(self, delta: int) -> None:
+        self.run_page = max(0, self.run_page + delta)
+        self.show_runs()
+
     def show_runs(self) -> None:
         try:
-            rows = self.agent.store.list_scheduled_runs(limit=100)
+            status_options = {
+                "Все": None, "Ожидает": "claimed",
+                "Успешно": "succeeded", "Ошибка": "failed",
+            }
+            status = status_options[self.run_status_filter.get()]
+            workflow_id = self.run_workflow_filter.get().strip() or None
+            total = self.agent.store.count_scheduled_runs(
+                status=status, workflow_id=workflow_id,
+            )
+            page_count = max(1, (total + self.run_page_size - 1) // self.run_page_size)
+            self.run_page = min(self.run_page, page_count - 1)
+            rows = self.agent.store.list_scheduled_runs(
+                limit=self.run_page_size, status=status, workflow_id=workflow_id,
+                offset=self.run_page * self.run_page_size,
+            )
             records = [
                 f"{datetime.fromtimestamp(item['claimed']).strftime('%Y-%m-%d %H:%M:%S')} "
-                f"| {item['workflow_id']} | {item['status']} "
-                f"| {item['run_key']}\n  {item['detail'][:200]}"
+                f"| {item['workflow_id']} | {item['status']}"
+                + (" [ТРЕБУЕТ ПРОВЕРКИ]" if item["needs_review"] else "")
+                + f" | {item['run_key']}\n  {item['detail'][:200]}"
                 for item in rows
             ]
-            self._set_text(self.runs_output, "\n\n".join(records) or "Запусков пока не было.")
+            self.run_page_label.set(
+                f"Страница {self.run_page + 1} из {page_count}, записей: {total}"
+            )
+            self.prev_run_page_button.configure(
+                state="normal" if self.run_page > 0 else "disabled"
+            )
+            self.next_run_page_button.configure(
+                state="normal" if self.run_page + 1 < page_count else "disabled"
+            )
+            self._set_text(self.runs_output, "\n\n".join(records) or "Запусков не найдено.")
         except Exception as error:
             self._set_text(self.runs_output, f"Не удалось прочитать журнал: {error}")
 
