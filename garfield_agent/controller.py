@@ -39,11 +39,36 @@ class AgentController:
         self.workflows = WorkflowLibrary(Path(project_dir) / "garfield_workflows.json", self.runner)
         self._pending_clear: tuple[str, float] | None = None
         self._privacy_lock = threading.Lock()
+        self._pending_retention: tuple[float, float] | None = None
 
     def handle(self, command: str) -> str | None:
         text = " ".join(command.strip().split())
         lower = text.lower()
         try:
+            if lower.startswith("очисти журнал старше "):
+                match = re.fullmatch(r"очисти журнал старше (\d{1,4}) дней", lower)
+                if not match:
+                    return "Формат: очисти журнал старше 90 дней"
+                preview = self.store.retention_preview(int(match.group(1)))
+                with self._privacy_lock:
+                    self._pending_retention = (preview["cutoff"], time.monotonic())
+                return (
+                    f"Удалению подлежат {preview['count']} завершённых запусков "
+                    f"старше {preview['days']} дней. Незавершённые claimed не затрагиваются. "
+                    "Для удаления в течение 120 секунд введите «подтверди очистку журнала»."
+                )
+            if lower == "отмени очистку журнала":
+                with self._privacy_lock:
+                    self._pending_retention = None
+                return "Очистка журнала отменена."
+            if lower == "подтверди очистку журнала":
+                with self._privacy_lock:
+                    pending = self._pending_retention
+                    self._pending_retention = None
+                    if not pending or time.monotonic() - pending[1] > 120:
+                        return "Нет подтверждённого запроса на очистку журнала."
+                    count = self.store.prune_scheduled_runs(pending[0])
+                return f"Удалено завершённых записей: {count}. Claimed не затронуты."
             if lower in {"удали сохраненную историю", "удали сохранённую историю"}:
                 with self._privacy_lock:
                     self._pending_clear = ("history", time.monotonic())

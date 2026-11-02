@@ -6,6 +6,8 @@ The model may propose a strictly validated plan; execution requires explicit con
 from __future__ import annotations
 
 import json
+import os
+import uuid
 import hashlib
 import logging
 import re
@@ -226,6 +228,13 @@ class WorkflowLibrary:
         self.path = Path(path)
         self.runner = runner
         self._observed_files: dict[str, bool] = {}
+        self.owner_session = uuid.uuid4().hex
+        self.owner_pid = os.getpid()
+        try:
+            import psutil
+            self.owner_created = psutil.Process(self.owner_pid).create_time()
+        except (ImportError, OSError):
+            self.owner_created = None
 
     def all(self) -> list[dict]:
         if not self.path.exists():
@@ -301,7 +310,10 @@ class WorkflowLibrary:
             run_key: str | None = None
             if flow["daily_at"] == clock:
                 candidate = f"daily:{date_key}:{clock}"
-                if self.runner.store.claim_scheduled_run(flow["id"], candidate):
+                if self.runner.store.claim_scheduled_run(
+                    flow["id"], candidate, owner_session=self.owner_session,
+                    owner_pid=self.owner_pid, owner_created=self.owner_created,
+                ):
                     run_key = candidate
                     jobs.append(ScheduledJob(flow["id"], flow["name"], flow["steps"], run_key))
             watched = flow["when_file_created"]
@@ -311,6 +323,9 @@ class WorkflowLibrary:
                 previous = self._observed_files.get(flow["id"])
                 self._observed_files[flow["id"]] = exists
                 if previous is False and exists:
-                    event_key = self.runner.store.claim_file_event_run(flow["id"])
+                    event_key = self.runner.store.claim_file_event_run(
+                        flow["id"], owner_session=self.owner_session,
+                        owner_pid=self.owner_pid, owner_created=self.owner_created,
+                    )
                     jobs.append(ScheduledJob(flow["id"], flow["name"], flow["steps"], event_key))
         return jobs

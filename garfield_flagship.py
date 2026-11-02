@@ -24,6 +24,8 @@ except ImportError:
 import garfield_best as core
 from garfield_agent.secrets import for_disk, from_disk
 from garfield_agent.controller import AgentController
+from garfield_runtime.tts_queue import TTSQueue
+from garfield_runtime.scheduler import schedule_loop
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -251,84 +253,6 @@ def save_config(config: FlagshipConfig, path: Path = CONFIG_PATH) -> None:
     )
 
 
-class TTSQueue:
-    def __init__(
-        self,
-        assistant_name: str,
-        enabled: bool,
-        output_device_index: int | None = None,
-        tts_voice: str = "ru-RU-SvetlanaNeural",
-        piper_model_path: str = "",
-        piper_config_path: str = "",
-    ) -> None:
-        self.speaker = core.Speaker(
-            assistant_name,
-            output_device_index,
-            tts_voice,
-            piper_model_path,
-            piper_config_path,
-        )
-        self.enabled = enabled
-        self.queue: queue.Queue[str | None] = queue.Queue()
-        self.stop_event = threading.Event()
-        self.busy_event = threading.Event()
-        self.worker = threading.Thread(target=self._worker_loop, daemon=True)
-        self.started = False
-
-    def start(self) -> None:
-        if self.started:
-            return
-        self.started = True
-        self.speaker.warmup()
-        self.worker.start()
-
-    def stop(self) -> None:
-        if not self.started:
-            return
-        self.stop_event.set()
-        self.speaker.interrupt()
-        self.queue.put(None)
-        self.worker.join(timeout=5)
-
-    def speak(self, text: str) -> None:
-        if self.enabled and text.strip():
-            self.queue.put(text)
-
-    def interrupt(self) -> None:
-        self.speaker.interrupt()
-        while True:
-            try:
-                item = self.queue.get_nowait()
-            except queue.Empty:
-                break
-            if item is not None:
-                self.queue.task_done()
-
-    def set_output_device(self, output_device_index: int | None) -> None:
-        self.speaker.set_output_device(output_device_index)
-
-    def set_voice(self, tts_voice: str) -> None:
-        self.speaker.set_voice(tts_voice)
-
-    def is_busy(self) -> bool:
-        return self.busy_event.is_set() or not self.queue.empty()
-
-    def _worker_loop(self) -> None:
-        while not self.stop_event.is_set():
-            item = self.queue.get()
-            if item is None:
-                return
-            self.busy_event.set()
-            try:
-                self.speaker.speak(item)
-            except Exception as error:
-                logging.warning("Ошибка озвучки: %s", error)
-            finally:
-                self.speaker.clear_interrupt()
-                self.busy_event.clear()
-                self.queue.task_done()
-
-
 class FlagshipRuntime:
     def __init__(self, config: FlagshipConfig) -> None:
         self.config = config
@@ -402,48 +326,7 @@ class FlagshipRuntime:
         self.events.put(RuntimeEvent(kind, text, time.time()))
 
     def _scheduler_loop(self) -> None:
-        last_update_check = 0.0
-        while not self.stop_event.wait(15):
-            if getattr(self.config, "auto_check_updates", False) and time.monotonic() - last_update_check > 86400:
-                last_update_check = time.monotonic()
-                try:
-                    update_message = self.agent_controller.updater.check()
-                    if "новых коммитов" in update_message:
-                        self.emit("status", update_message)
-                except Exception as error:
-                    logging.info("Проверка обновлений недоступна: %s", error)
-            if not getattr(self.config, "enable_schedules", False):
-                continue
-            try:
-                jobs = self.agent_controller.workflows.due_read_only()
-            except Exception as error:
-                logging.exception("Не удалось прочитать расписание")
-                self.emit("status", f"Ошибка расписания: {error}")
-                continue
-            for job in jobs:
-                success = False
-                detail = ""
-                try:
-                    result = []
-                    for step in job.steps:
-                        if self.stop_event.is_set():
-                            return
-                        result.append(self.agent_controller.tools.execute(step["tool"], step["args"]))
-                    success = True
-                    detail = "Выполнено шагов: " + str(len(result))
-                    self.emit("status", f"Запланированная проверка «{job.label}»: " + " | ".join(result)[:350])
-                except Exception as error:
-                    detail = f"{type(error).__name__}: {error}"[:500]
-                    logging.exception("Ошибка сценария %s", job.flow_id)
-                    self.emit("status", f"Ошибка сценария «{job.label}»: {error}")
-                finally:
-                    if job.run_key:
-                        try:
-                            self.agent_controller.store.finish_scheduled_run(
-                                job.flow_id, job.run_key, success, detail
-                            )
-                        except Exception:
-                            logging.exception("Не удалось записать состояние сценария %s", job.flow_id)
+        schedule_loop(self)
 
     def submit_text(self, text: str, source: str = "manual") -> None:
         normalized = core.normalize_text(text)

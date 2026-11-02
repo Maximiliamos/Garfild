@@ -11,6 +11,7 @@ from pathlib import Path
 import customtkinter as ctk
 
 from garfield_agent.runner import WorkflowLibrary
+from garfield_runtime.schedule_health import describe_claim
 from ..components import action_button, card
 from ..theme import COLORS, FONTS
 from ..workflow_builder import WorkflowBuilder
@@ -137,11 +138,29 @@ class AutomationPage(ctk.CTkFrame):
         )
         self.next_run_page_button.grid(row=0, column=2, padx=(10, 0))
 
+        retention = ctk.CTkFrame(log_tab, fg_color="transparent")
+        retention.grid(row=4, column=0, sticky="ew", padx=16, pady=(0, 7))
+        self.retention_days = tk.StringVar(value="90")
+        ctk.CTkEntry(
+            retention, textvariable=self.retention_days, width=90,
+            placeholder_text="Дней"
+        ).grid(row=0, column=0, padx=(0, 7))
+        action_button(
+            retention, "Проверить очистку", self.preview_cleanup, width=160
+        ).grid(row=0, column=1, padx=(0, 7))
+        action_button(
+            retention, "Подтвердить очистку", self.confirm_cleanup, width=175,
+            tone="danger"
+        ).grid(row=0, column=2, padx=(0, 7))
+        action_button(
+            retention, "Отменить очистку", self.cancel_cleanup, width=145,
+            tone="ghost"
+        ).grid(row=0, column=3)
         self.runs_output = ctk.CTkTextbox(
             log_tab, font=FONTS["mono"], fg_color=COLORS["input"], wrap="word"
         )
-        self.runs_output.grid(row=4, column=0, sticky="nsew", padx=16, pady=(0, 12))
-        log_tab.grid_rowconfigure(4, weight=1)
+        self.runs_output.grid(row=5, column=0, sticky="nsew", padx=16, pady=(0, 12))
+        log_tab.grid_rowconfigure(5, weight=1)
 
         self.load_flows()
         self.show_notes()
@@ -187,6 +206,22 @@ class AutomationPage(ctk.CTkFrame):
         self._run("повтори неудачный сценарий " + identifier)
         self.tabs.set("ИИ-агент")
 
+    def preview_cleanup(self) -> None:
+        days = self.retention_days.get().strip()
+        if not days.isdigit() or not 1 <= int(days) <= 3650:
+            self.app.show_notice("Укажите от 1 до 3650 дней", "warning")
+            return
+        self._run(f"очисти журнал старше {days} дней")
+        self.tabs.set("ИИ-агент")
+
+    def confirm_cleanup(self) -> None:
+        self._run("подтверди очистку журнала")
+        self.tabs.set("ИИ-агент")
+
+    def cancel_cleanup(self) -> None:
+        self._run("отмени очистку журнала")
+        self.tabs.set("ИИ-агент")
+
     def reset_run_page(self) -> None:
         self.run_page = 0
         self.show_runs()
@@ -215,7 +250,9 @@ class AutomationPage(ctk.CTkFrame):
             records = [
                 f"{datetime.fromtimestamp(item['claimed']).strftime('%Y-%m-%d %H:%M:%S')} "
                 f"| {item['workflow_id']} | {item['status']}"
-                + (" [ТРЕБУЕТ ПРОВЕРКИ]" if item["needs_review"] else "")
+                + (" [ТРЕБУЕТ ПРОВЕРКИ: " + describe_claim(
+                    item, current_session=self.agent.workflows.owner_session
+                ) + "]" if item["needs_review"] else "")
                 + f" | {item['run_key']}\n  {item['detail'][:200]}"
                 for item in rows
             ]

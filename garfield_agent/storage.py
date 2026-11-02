@@ -52,13 +52,24 @@ class LocalStore:
                     claimed REAL NOT NULL,
                     status TEXT NOT NULL,
                     detail TEXT NOT NULL DEFAULT '',
+                    owner_session TEXT NOT NULL DEFAULT '',
+                    owner_pid INTEGER,
+                    owner_created REAL,
+                    heartbeat REAL,
                     PRIMARY KEY (workflow_id, run_key)
                 );
             """)
             # Existing installations predate the optional detail column.
             columns = {row[1] for row in db.execute("PRAGMA table_info(scheduled_runs)")}
-            if "detail" not in columns:
-                db.execute("ALTER TABLE scheduled_runs ADD COLUMN detail TEXT NOT NULL DEFAULT ''")
+            for name, definition in (
+                ("detail", "TEXT NOT NULL DEFAULT ''"),
+                ("owner_session", "TEXT NOT NULL DEFAULT ''"),
+                ("owner_pid", "INTEGER"),
+                ("owner_created", "REAL"),
+                ("heartbeat", "REAL"),
+            ):
+                if name not in columns:
+                    db.execute(f"ALTER TABLE scheduled_runs ADD COLUMN {name} {definition}")
             db.execute(
                 "CREATE INDEX IF NOT EXISTS scheduled_runs_filter_idx "
                 "ON scheduled_runs(status, workflow_id, claimed DESC)"
@@ -174,7 +185,11 @@ class LocalStore:
                     break
         return matched
 
-    def claim_scheduled_run(self, workflow_id: str, run_key: str) -> bool:
+    def claim_scheduled_run(
+        self, workflow_id: str, run_key: str, *,
+        owner_session: str = "", owner_pid: int | None = None,
+        owner_created: float | None = None,
+    ) -> bool:
         """Atomically reserve an execution before running it.
 
         A claimed schedule is never automatically retried, including when the
@@ -182,28 +197,54 @@ class LocalStore:
         """
         if not workflow_id or len(workflow_id) > 40 or not run_key or len(run_key) > 100:
             raise ValueError("Invalid scheduled run identifier")
+        if len(owner_session) > 64 or (owner_pid is not None and owner_pid <= 0):
+            raise ValueError("Invalid run owner")
+        claimed = time.time()
         with self._lock, self._connect() as db:
             cursor = db.execute(
-                "INSERT OR IGNORE INTO scheduled_runs(workflow_id, run_key, claimed, status) "
-                "VALUES (?, ?, ?, ?)",
-                (workflow_id, run_key, time.time(), "claimed"),
+                "INSERT OR IGNORE INTO scheduled_runs("
+                "workflow_id, run_key, claimed, status, owner_session, owner_pid, owner_created, heartbeat) "
+                "VALUES (?, ?, ?, 'claimed', ?, ?, ?, ?)",
+                (workflow_id, run_key, claimed, owner_session, owner_pid, owner_created, claimed),
             )
             return cursor.rowcount == 1
 
-    def claim_file_event_run(self, workflow_id: str) -> str:
+    def claim_file_event_run(
+        self, workflow_id: str, *, owner_session: str = "",
+        owner_pid: int | None = None, owner_created: float | None = None,
+    ) -> str:
         """Journal a detected file event; detection itself remains in-memory."""
         import uuid
 
         if not workflow_id or len(workflow_id) > 40:
             raise ValueError("Invalid workflow identifier")
         run_key = "file:" + uuid.uuid4().hex
+        if len(owner_session) > 64 or (owner_pid is not None and owner_pid <= 0):
+            raise ValueError("Invalid run owner")
+        claimed = time.time()
         with self._lock, self._connect() as db:
             db.execute(
-                "INSERT INTO scheduled_runs(workflow_id, run_key, claimed, status) "
-                "VALUES (?, ?, ?, 'claimed')",
-                (workflow_id, run_key, time.time()),
+                "INSERT INTO scheduled_runs("
+                "workflow_id, run_key, claimed, status, owner_session, owner_pid, owner_created, heartbeat) "
+                "VALUES (?, ?, ?, 'claimed', ?, ?, ?, ?)",
+                (workflow_id, run_key, claimed, owner_session, owner_pid, owner_created, claimed),
             )
         return run_key
+
+    def heartbeat_scheduled_run(
+        self, workflow_id: str, run_key: str, owner_session: str,
+    ) -> bool:
+        """Only the originating runtime can refresh an unfinished claim."""
+        if not owner_session:
+            return False
+        with self._lock, self._connect() as db:
+            result = db.execute(
+                "UPDATE scheduled_runs SET heartbeat = ? "
+                "WHERE workflow_id = ? AND run_key = ? "
+                "AND status = 'claimed' AND owner_session = ?",
+                (time.time(), workflow_id, run_key, owner_session),
+            )
+        return result.rowcount == 1
 
     def finish_scheduled_run(
         self, workflow_id: str, run_key: str, success: bool, detail: str = ""
@@ -268,23 +309,28 @@ class LocalStore:
         where, params = self._scheduled_filters(status, workflow_id)
         with self._lock, self._connect() as db:
             rows = db.execute(
-                "SELECT workflow_id, run_key, claimed, status, detail "
+                "SELECT workflow_id, run_key, claimed, status, detail, "
+                "owner_session, owner_pid, owner_created, heartbeat "
                 "FROM scheduled_runs" + where +
                 " ORDER BY claimed DESC, rowid DESC LIMIT ? OFFSET ?",
                 [*params, limit, offset],
             ).fetchall()
         current_time = time.time() if now is None else float(now)
-        return [
-            {
-                "workflow_id": workflow_id, "run_key": run_key,
+        result = []
+        for (flow_id, run_key, claimed, state, detail, session_id, pid,
+             created, heartbeat) in rows:
+            last = float(heartbeat if heartbeat is not None else claimed)
+            result.append({
+                "workflow_id": flow_id, "run_key": run_key,
                 "claimed": float(claimed), "status": state,
                 "detail": self._unseal(detail),
-                "needs_review": (
-                    state == "claimed" and current_time - float(claimed) >= review_after_sec
-                ),
-            }
-            for workflow_id, run_key, claimed, state, detail in rows
-        ]
+                "owner_session": session_id or "",
+                "owner_pid": pid,
+                "owner_created": created,
+                "heartbeat": last,
+                "needs_review": state == "claimed" and current_time - last >= review_after_sec,
+            })
+        return result
 
     def latest_scheduled_run(self, workflow_id: str) -> dict[str, Any] | None:
         with self._lock, self._connect() as db:
@@ -308,6 +354,36 @@ class LocalStore:
                 (workflow_id, run_key),
             ).fetchone()
             return row[0] if row else None
+
+    def retention_preview(self, days: int, *, now: float | None = None) -> dict:
+        """Estimate completed records eligible for explicit cleanup. Claimed never qualify."""
+        days = int(days)
+        if not 1 <= days <= 3650:
+            raise ValueError("Срок хранения должен быть от 1 до 3650 дней")
+        cutoff = (time.time() if now is None else float(now)) - days * 86400
+        with self._lock, self._connect() as db:
+            count = db.execute(
+                "SELECT COUNT(*) FROM scheduled_runs "
+                "WHERE claimed < ? AND status IN ('succeeded','failed')",
+                (cutoff,),
+            ).fetchone()[0]
+        return {"days": days, "cutoff": cutoff, "count": int(count)}
+
+    def prune_scheduled_runs(self, cutoff: float) -> int:
+        """User-approved cleanup; never remove claimed or active jobs."""
+        if not isinstance(cutoff, (int, float)) or not 0 < cutoff < time.time():
+            raise ValueError("Некорректная дата очистки")
+        with self._lock:
+            with self._connect() as db:
+                deleted = db.execute(
+                    "DELETE FROM scheduled_runs WHERE claimed < ? "
+                    "AND status IN ('succeeded','failed')",
+                    (float(cutoff),),
+                ).rowcount
+            if deleted:
+                with self._connect() as db:
+                    db.execute("VACUUM")
+        return int(deleted)
 
     def record_run(self, steps: list[dict], results: list[dict]) -> None:
         plan = json.dumps(steps, ensure_ascii=False)
