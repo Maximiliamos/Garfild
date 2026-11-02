@@ -33,6 +33,8 @@ def analyze_screen(
     if not model or len(model) > 128:
         raise ValueError("Необходимо выбрать vision-модель")
     require_loopback(url)
+    if urlsplit(url).path != "/api/generate" or urlsplit(url).query:
+        raise ValueError("Vision поддерживает только локальный Ollama endpoint /api/generate")
     if image_bytes is None:
         try:
             import pyautogui
@@ -47,7 +49,8 @@ def analyze_screen(
         raise ValueError("Изображение экрана слишком большое или пустое")
     if session is None:
         import requests
-        session = requests
+        session = requests.Session()
+        session.trust_env = False  # Never forward desktop pixels through system proxies.
     client = session
     response = client.post(
         url, json={

@@ -30,6 +30,17 @@ class VisionTests(unittest.TestCase):
         self.assertEqual(fake.payload[1]["model"], "llava:7b")
         self.assertEqual(len(fake.payload[1]["images"]), 1)
 
+    def test_rejects_alternative_local_endpoint(self):
+        fake = FakeClient()
+        with self.assertRaisesRegex(ValueError, "/api/generate"):
+            analyze_screen(
+                "screen",
+                url="http://127.0.0.1:11434/admin",
+                image_bytes=b"jpeg",
+                session=fake,
+            )
+        self.assertIsNone(fake.payload)
+
     def test_rejects_large_capture_before_network(self):
         with self.assertRaises(ValueError):
             analyze_screen("screen", image_bytes=b"x" * 3_500_001, session=FakeClient())

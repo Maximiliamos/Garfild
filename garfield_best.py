@@ -1276,6 +1276,9 @@ class LLMClient:
         self.api_key = api_key.strip()
         self.api_type = str(LLM_PROVIDERS[self.provider]["api"])
         self.session = requests.Session()
+        if self.provider in {"ollama", "llamacpp"}:
+            # Env HTTP(S)_PROXY must not receive local chat prompts.
+            self.session.trust_env = False
 
     def is_available(self) -> bool:
         return self.provider in {"ollama", "llamacpp"} or bool(os.getenv(self.api_key_env, "").strip() or self.api_key)

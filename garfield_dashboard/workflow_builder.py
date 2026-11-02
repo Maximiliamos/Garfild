@@ -33,6 +33,8 @@ class WorkflowBuilder(ctk.CTkToplevel):
             raise ValueError("Неверный формат workflows")
         self.steps = []
         self.drag_iid = None
+        self.current_flow_id = None
+        self.loaded_snapshot = None
         self.selector = tk.StringVar()
         self.identifier = tk.StringVar()
         self.label = tk.StringVar()
@@ -71,6 +73,7 @@ class WorkflowBuilder(ctk.CTkToplevel):
         self.table.bind("<<TreeviewSelect>>", self.populate_selected)
         self.table.bind("<ButtonPress-1>", self.drag_start)
         self.table.bind("<B1-Motion>", self.drag_move)
+        self.table.bind("<ButtonRelease-1>", self.drag_end)
 
         item = ctk.CTkFrame(self, fg_color="transparent")
         item.pack(fill="x", padx=16, pady=5)
@@ -92,7 +95,18 @@ class WorkflowBuilder(ctk.CTkToplevel):
             actions.grid_columnconfigure(i, weight=1)
         self.load_flow(names[0])
 
+    def _snapshot(self):
+        return (
+            self.identifier.get(), self.label.get(), self.schedule.get(),
+            self.trigger.get(), json.dumps(self.steps, ensure_ascii=False, sort_keys=True),
+        )
+
     def load_flow(self, identifier: str):
+        if (self.current_flow_id is not None and identifier != self.current_flow_id
+                and self.loaded_snapshot != self._snapshot()):
+            self.selector.set(self.current_flow_id)
+            self.status.set("Есть несохранённые изменения. Сначала примените их к JSON.")
+            return
         self.steps = []
         found = next((f for f in self.flows if f.get("id") == identifier), None)
         self.identifier.set(found.get("id", "") if found else "")
@@ -101,6 +115,8 @@ class WorkflowBuilder(ctk.CTkToplevel):
         self.trigger.set(found.get("when_file_created") or "" if found else "")
         if found:
             self.steps = [dict(step) for step in found["steps"]]
+        self.current_flow_id = identifier
+        self.loaded_snapshot = self._snapshot()
         self.refresh()
 
     def refresh(self):
@@ -174,6 +190,10 @@ class WorkflowBuilder(ctk.CTkToplevel):
             new = self.table.index(target)
             self.steps = move_step(self.steps, old, new)
             self.table.move(self.drag_iid, "", new)
+            self.table.selection_set(self.drag_iid)
+
+    def drag_end(self, _event):
+        self.drag_iid = None
 
     def apply(self):
         try:
