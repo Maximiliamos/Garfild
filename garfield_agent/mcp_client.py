@@ -10,7 +10,6 @@ import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
-import requests
 
 from .vision import require_loopback
 
@@ -20,7 +19,10 @@ NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 class LocalMCP:
     def __init__(self, config: Path, session=None):
         self.config = Path(config)
-        self.session = session if session is not None else requests.Session()
+        if session is None:
+            import requests
+            session = requests.Session()
+        self.session = session
 
     def servers(self) -> dict[str, dict]:
         if not self.config.exists():

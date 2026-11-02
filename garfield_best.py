@@ -1126,6 +1126,13 @@ class KeyboardInput:
 
 
 LLM_PROVIDERS: dict[str, dict[str, object]] = {
+    "llamacpp": {
+        "name": "llama.cpp (локально)",
+        "api": "openai-completions",
+        "chat_url": "http://127.0.0.1:8080/v1/chat/completions",
+        "api_key_env": "",
+        "models": [{"id": "local-model", "name": "Локальная GGUF-модель"}],
+    },
     "ollama": {
         "name": "Ollama (локально)",
         "api": "ollama",
@@ -1271,9 +1278,11 @@ class LLMClient:
         self.session = requests.Session()
 
     def is_available(self) -> bool:
-        return self.provider == "ollama" or bool(os.getenv(self.api_key_env, "").strip() or self.api_key)
+        return self.provider in {"ollama", "llamacpp"} or bool(os.getenv(self.api_key_env, "").strip() or self.api_key)
 
     def _api_key(self) -> str:
+        if self.provider == "llamacpp":
+            return "local"
         key = os.getenv(self.api_key_env, "").strip() or self.api_key
         if not key:
             raise RuntimeError(
@@ -1336,6 +1345,12 @@ class LLMClient:
             payload["reasoning_effort"] = "low"
             payload["max_tokens"] = max(max_tokens, 200)
 
+        if self.provider == "llamacpp":
+            from urllib.parse import urlsplit
+            target = urlsplit(self.api_url)
+            if (target.scheme != "http" or target.hostname not in {"localhost", "127.0.0.1", "::1"}
+                    or target.path != "/v1/chat/completions" or target.username or target.password):
+                raise ValueError("llama.cpp разрешён только на локальном HTTP-сервере /v1/chat/completions")
         response = self.session.post(
             self.api_url,
             headers={

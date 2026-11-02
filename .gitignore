@@ -15,3 +15,4 @@ venv/
 models/
 voice_samples/
 llm_audit_results.json
+\ndist/\nbuild/\n*.spec\ngarfield_session_history_export.*\n

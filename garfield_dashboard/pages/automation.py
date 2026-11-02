@@ -12,6 +12,7 @@ import customtkinter as ctk
 from garfield_agent.runner import WorkflowLibrary
 from ..components import action_button, card
 from ..theme import COLORS, FONTS
+from ..workflow_builder import WorkflowBuilder
 
 
 class AutomationPage(ctk.CTkFrame):
@@ -60,6 +61,7 @@ class AutomationPage(ctk.CTkFrame):
         action_button(footer, "Показать план", self.preview_flow, width=150).grid(row=0, column=1, padx=8)
         action_button(footer, "Сохранить JSON", self.save_flows, width=150, tone="ghost").grid(row=0, column=2, padx=8)
         action_button(footer, "Обновить", self.load_flows, width=110, tone="ghost").grid(row=0, column=3)
+        action_button(footer, "Конструктор", self.open_builder, width=130).grid(row=0, column=4, padx=(8, 0))
 
         memory_tab = tabs.tab("Память")
         ctk.CTkLabel(memory_tab, text="Заметки хранятся локально. Данные не шифруются.",
@@ -121,6 +123,23 @@ class AutomationPage(ctk.CTkFrame):
         self.flow_json.configure(state="normal")
         self.flow_json.delete("1.0", "end")
         self.flow_json.insert("1.0", raw)
+
+    def open_builder(self) -> None:
+        try:
+            WorkflowBuilder(
+                self,
+                self.flow_json.get("1.0", "end").strip(),
+                self.agent.runner,
+                self._apply_builder_json,
+            )
+        except Exception as error:
+            self.app.show_notice(f"Ошибка конструктора: {error}", "danger")
+
+    def _apply_builder_json(self, content: str) -> None:
+        self.flow_json.configure(state="normal")
+        self.flow_json.delete("1.0", "end")
+        self.flow_json.insert("1.0", content)
+        self.app.show_notice("Изменения показаны в JSON. Нажмите «Сохранить JSON».", "success")
 
     def save_flows(self) -> None:
         path = self.agent.workflows.path

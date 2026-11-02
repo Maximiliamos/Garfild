@@ -69,6 +69,7 @@ class FlagshipConfig:
     allow_power_commands: bool = False
     persist_history: bool = False
     enable_schedules: bool = False
+    auto_check_updates: bool = False
     input_mode: str = "auto"
     ui_mode: str = "auto"
     require_name_prefix: bool = False
@@ -400,7 +401,16 @@ class FlagshipRuntime:
         self.events.put(RuntimeEvent(kind, text, time.time()))
 
     def _scheduler_loop(self) -> None:
+        last_update_check = 0.0
         while not self.stop_event.wait(15):
+            if getattr(self.config, "auto_check_updates", False) and time.monotonic() - last_update_check > 86400:
+                last_update_check = time.monotonic()
+                try:
+                    update_message = self.agent_controller.updater.check()
+                    if "новых коммитов" in update_message:
+                        self.emit("status", update_message)
+                except Exception as error:
+                    logging.info("Проверка обновлений недоступна: %s", error)
             if not getattr(self.config, "enable_schedules", False):
                 continue
             try:

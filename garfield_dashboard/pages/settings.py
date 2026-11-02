@@ -28,6 +28,7 @@ class SettingsPage(ctk.CTkFrame):
             "allow_power_commands": tk.BooleanVar(),
             "persist_history": tk.BooleanVar(),
             "enable_schedules": tk.BooleanVar(),
+            "auto_check_updates": tk.BooleanVar(),
             "screen_hints_enabled": tk.BooleanVar(),
             "command_confirmation_timeout_sec": tk.StringVar(),
             "confirm_phrases": tk.StringVar(),
@@ -90,6 +91,7 @@ class SettingsPage(ctk.CTkFrame):
         self._switch("Силовые команды", row, self.vars["allow_power_commands"]); row += 1
         self._switch("Сохранять историю в SQLite", row, self.vars["persist_history"]); row += 1
         self._switch("Расписание безопасных проверок", row, self.vars["enable_schedules"]); row += 1
+        self._switch("Ежедневно проверять GitHub-обновления", row, self.vars["auto_check_updates"]); row += 1
         self._switch("Экранные подсказки", row, self.vars["screen_hints_enabled"]); row += 1
 
         row = self._section("Подтверждение команд", row)
@@ -193,6 +195,7 @@ class SettingsPage(ctk.CTkFrame):
             "allow_power_commands": cfg.allow_power_commands,
             "persist_history": getattr(cfg, "persist_history", False),
             "enable_schedules": getattr(cfg, "enable_schedules", False),
+            "auto_check_updates": getattr(cfg, "auto_check_updates", False),
             "screen_hints_enabled": cfg.screen_hints_enabled,
             "command_confirmation_timeout_sec": str(cfg.command_confirmation_timeout_sec),
             "confirm_phrases": ", ".join(cfg.confirm_phrases),

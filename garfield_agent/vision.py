@@ -10,7 +10,6 @@ import base64
 import io
 from urllib.parse import urlsplit
 
-import requests
 
 
 def require_loopback(url: str) -> None:
@@ -46,7 +45,10 @@ def analyze_screen(
         image_bytes = stream.getvalue()
     if not image_bytes or len(image_bytes) > 3_500_000:
         raise ValueError("Изображение экрана слишком большое или пустое")
-    client = session if session is not None else requests
+    if session is None:
+        import requests
+        session = requests
+    client = session
     response = client.post(
         url, json={
             "model": model, "prompt": prompt, "images": [base64.b64encode(image_bytes).decode("ascii")],

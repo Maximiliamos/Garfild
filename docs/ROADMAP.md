@@ -1,41 +1,64 @@
-# Garfield development roadmap
+# Garfield — единый ROADMAP (актуализирован 2026-11-02)
 
-## Implemented on this branch
-- Add a constrained agent JSON planner with user approval and 6-step limit; results are recorded in SQLite.
-- Allowlist of local tools including workspace files, notes, app launch, browser and web search.
-- Add a dashboard tab for agent plans, workflow JSON validation/editor and local notes.
-- Add opt-in SQLite conversation persistence and safe read-only daily scheduling.
-- Add optional localhost-only Ollama API provider (requires a separately installed Ollama server and model).
-- Fix exact exit-command matching (avoids "покажи" triggering "пока").
-- Fix Grok provider alias to xAI.
-- Context-aware, model-specific response cache with a 5-minute TTL; do not cache API-failure fallbacks.
-- Isolate command-handler failures so a single bad command does not kill the worker.
-- Require explicit user confirmation before executing local run/python/hotkey skills.
-- Disallow shell=True in configured run skills.
-- Limit visible dashboard chat rows and history rendering.
-- Add static regression tests and GitHub CI.
+В этом файле состояния означают изменения **в коде**, а не подтверждение
+исправной работы на компьютере пользователя.
 
-## Not yet implemented or verified
-- Windows DPAPI API-key encryption added on config save; migration/UI key rotation not verified on hardware.
-- Automated Ollama model download and llama.cpp provider (basic local Ollama HTTP integration is implemented).
-- Encrypted personal memory, automatic retrieval of relevant notes and cross-device sync (SQLite notes + opt-in local conversation history implemented).
-- Trigger-based workflows, drag-and-drop visual editor and rollback (JSON workflows + daily read-only scheduler + GUI editor implemented).
-- Dedicated on-device wake-word model and real audio benchmarking (optional faster-whisper engine added, not hardware-validated).
-- Signed Windows installer and automatic updater.
-- Full modularization of core/GUI and dependency isolation.
-- Automated hardware-in-the-loop testing of Vosk/Piper/audio and desktop automation.
-- Actual API compatibility with the model IDs supplied by providers.
+## Реализовано и проверяется в PR #2
+- [x] Локальный анализ экрана через vision-модель Ollama; явная команда и запрет удалённых URL.
+- [x] Подключение простых Streamable HTTP MCP-инструментов на loopback с явным allowlist и подтверждением плана.
+- [x] Ограниченное перепланирование после сбоя: не повторять подтверждённые успешные шаги, новая проверка и согласование.
+- [x] Попытка отката только созданных текстовых файлов / пустых папок, с проверкой изменения файла.
+- [x] Событийные сценарии появления файла в выделенной рабочей папке; автоматически только read-only.
+- [x] Конструктор сценариев в GUI: редактирование и перетаскивание шагов, условия и валидация.
+- [x] Локальный провайдер llama.cpp через OpenAI-compatible endpoint, с проверкой loopback.
+- [x] Управляемая загрузка разрешённых моделей Ollama после подтверждения.
+- [x] Windows DPAPI для новых заметок, истории, журналов; миграция старой SQLite-базы.
+- [x] Проверка GitHub-обновлений и установка только после согласия, с git ff-only и защитой локальных изменений.
+- [x] Скрипт упаковки Windows (PyInstaller/Inno Setup preview; без подписи).
+- [x] Скрипт локальной диагностики Windows/микрофона.
+- [x] Дополнительные регрессионные тесты.
 
-## Security notes
-Skills run with the privileges of the user running Garfield. Do not load untrusted skills files or
-untrusted Python scripts. Confirmation helps prevent accidental execution but is not a sandbox.
-Windows DPAPI encrypts API keys when saving settings; older plaintext config files
-remain readable until saved again. Use environment variables outside Windows.
+## Ранее внедрено в main
+- [x] Защита команд и навыков, остановки обработчика исключениями, исправленный контекстный кэш.
+- [x] Локальный Ollama, опциональный faster-whisper, безопасные инструменты Windows/браузера.
+- [x] Подтверждаемые многошаговые планы, JSON-сценарии, SQLite-память, тесты CI для Linux/Windows.
+- [x] Windows DPAPI для API-ключей.
 
-## Test on a Windows PC
-1. Create a Python 3.11 virtual environment and install requirements.
-2. Run `python -m unittest discover -s tests -v`.
-3. Check `покажи список команд` does not exit and `выход` does.
-4. Verify a run/python/hotkey skill asks for confirmation and cancels on "нет".
-5. Test microphone changes during active Vosk recognition.
-6. Check TTS interruption, log export and graceful exit.
+## Осталось / требует внешних условий или реального оборудования
+- [ ] **Реальные интеграционные испытания на Windows**: микрофон, Vosk/Whisper,
+  Piper/Edge TTS, разные аудиоустройства, UI Automation, браузер, DPAPI при
+  переносе профиля, контролируемые обновления.
+- [ ] **Проверка действительных API моделей и лимитов** каждого LLM-провайдера,
+  с реальными ключами и серверами. CI проверяет код, а не платные запросы.
+- [ ] **Полная совместимость MCP**: транспорт SSE с несколькими событиями,
+  авторизация, удалённые доверенные серверы, refresh/session lifecycle,
+  совместимость с несколькими версиями протокола; сейчас минимальный клиент.
+- [ ] **Полный автономный агент** с динамическим выбором инструментов,
+  многократной самокоррекцией и проверкой фактического результата:
+  текущий вариант intentionally требует подтверждения и ограничен 6 шагами.
+- [ ] **Отдельная модель ключевого слова** и акустическая лабораторная оценка
+  русской речи: сейчас Vosk и faster-whisper.
+- [ ] **Автоматическая синхронизация памяти между компьютерами**: нужен
+  выбранный сервер/провайдер хранения, схема авторизации и сквозное шифрование;
+  DPAPI текущего пользователя не переносим.
+- [ ] **Установщик с цифровой подписью**: требуется сертификат Code Signing.
+  Текущий проект может собрать только неподписанный пакет.
+- [ ] **Обновления ZIP/EXE установок**: git-updater доступен только для
+  чистых рабочих Git-копий; для EXE нужен подписанный manifest/download.
+- [ ] **Полное разделение** монолитных старых `garfield_best.py`,
+  `garfield_flagship.py` и legacy tkinter на изолированные пакеты без
+  регрессий. Новые функции уже реализованы отдельными модулями.
+
+## Как проверить
+1. `python -m compileall -q garfield_best.py garfield_flagship.py garfield_agent garfield_dashboard`
+2. `python -m unittest discover -s tests -v`
+3. `python tools/diagnose_windows.py --mic` на компьютере пользователя.
+4. Проверить «посмотри на экран» только с локальным Ollama vision.
+5. Протестировать JSON-сценарии и отказ от опасных инструментов.
+6. Проверить переключение Vosk/Whisper и прерывание озвучивания.
+7. Провести пилотное обновление на отдельной тестовой копии, не на рабочем ПК.
+
+## Правило развёртывания
+Автоматические тесты недостаточны для заявления «100% готово».
+Следующие версии с новой логикой действий следует выпускать только
+после ручного Windows smoke-test и проверки разрешений.
