@@ -415,16 +415,30 @@ class FlagshipRuntime:
             if not getattr(self.config, "enable_schedules", False):
                 continue
             try:
-                for label, steps in self.agent_controller.workflows.due_read_only():
+                jobs = self.agent_controller.workflows.due_read_only()
+            except Exception as error:
+                logging.exception("Не удалось прочитать расписание")
+                self.emit("status", f"Ошибка расписания: {error}")
+                continue
+            for job in jobs:
+                success = False
+                try:
                     result = []
-                    for step in steps:
+                    for step in job.steps:
                         if self.stop_event.is_set():
                             return
                         result.append(self.agent_controller.tools.execute(step["tool"], step["args"]))
-                    self.emit("status", f"Запланированная проверка «{label}»: " + " | ".join(result)[:350])
-            except Exception as error:
-                logging.exception("Ошибка проверки расписания")
-                self.emit("status", f"Ошибка сценария: {error}")
+                    success = True
+                    self.emit("status", f"Запланированная проверка «{job.label}»: " + " | ".join(result)[:350])
+                except Exception as error:
+                    logging.exception("Ошибка сценария %s", job.flow_id)
+                    self.emit("status", f"Ошибка сценария «{job.label}»: {error}")
+                finally:
+                    if job.run_key:
+                        try:
+                            self.agent_controller.store.finish_scheduled_run(job.flow_id, job.run_key, success)
+                        except Exception:
+                            logging.exception("Не удалось записать состояние сценария %s", job.flow_id)
 
     def submit_text(self, text: str, source: str = "manual") -> None:
         normalized = core.normalize_text(text)

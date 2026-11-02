@@ -46,6 +46,13 @@ class LocalStore:
                     plan TEXT NOT NULL,
                     result TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS scheduled_runs (
+                    workflow_id TEXT NOT NULL,
+                    run_key TEXT NOT NULL,
+                    claimed REAL NOT NULL,
+                    status TEXT NOT NULL,
+                    PRIMARY KEY (workflow_id, run_key)
+                );
             """)
         if self.encrypt_at_rest:
             self._migrate_legacy()
@@ -157,6 +164,39 @@ class LocalStore:
                 if len(matched) >= limit:
                     break
         return matched
+
+    def claim_scheduled_run(self, workflow_id: str, run_key: str) -> bool:
+        """Atomically reserve an execution before running it.
+
+        A claimed schedule is never automatically retried, including when the
+        process crashes. This deliberately favors at-most-once execution.
+        """
+        if not workflow_id or len(workflow_id) > 40 or not run_key or len(run_key) > 100:
+            raise ValueError("Invalid scheduled run identifier")
+        with self._lock, self._connect() as db:
+            cursor = db.execute(
+                "INSERT OR IGNORE INTO scheduled_runs(workflow_id, run_key, claimed, status) "
+                "VALUES (?, ?, ?, ?)",
+                (workflow_id, run_key, time.time(), "claimed"),
+            )
+            return cursor.rowcount == 1
+
+    def finish_scheduled_run(self, workflow_id: str, run_key: str, success: bool) -> None:
+        with self._lock, self._connect() as db:
+            updated = db.execute(
+                "UPDATE scheduled_runs SET status = ? WHERE workflow_id = ? AND run_key = ?",
+                ("succeeded" if success else "failed", workflow_id, run_key),
+            )
+            if updated.rowcount != 1:
+                raise ValueError("Unknown scheduled run")
+
+    def scheduled_run_status(self, workflow_id: str, run_key: str) -> str | None:
+        with self._lock, self._connect() as db:
+            row = db.execute(
+                "SELECT status FROM scheduled_runs WHERE workflow_id = ? AND run_key = ?",
+                (workflow_id, run_key),
+            ).fetchone()
+            return row[0] if row else None
 
     def record_run(self, steps: list[dict], results: list[dict]) -> None:
         plan = json.dumps(steps, ensure_ascii=False)
