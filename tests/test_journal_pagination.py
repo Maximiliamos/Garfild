@@ -75,8 +75,9 @@ class JournalPaginationTests(unittest.TestCase):
         self.assertTrue(self.store.claim_scheduled_run("alpha", "daily:2026-11-02:09:00"))
         with self.store._lock, self.store._connect() as db:
             db.execute(
-                "UPDATE scheduled_runs SET claimed = ? WHERE workflow_id = 'alpha'",
-                (self.now - 3600,),
+                "UPDATE scheduled_runs SET claimed = ?, heartbeat = ? "
+                "WHERE workflow_id = 'alpha'",
+                (self.now - 3600, self.now - 3600),
             )
         old = self.store.list_scheduled_runs(now=self.now)[0]
         self.assertTrue(old["needs_review"])
