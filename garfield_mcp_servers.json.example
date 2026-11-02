@@ -1,0 +1,8 @@
+{
+  "servers": {
+    "local-tools": {
+      "url": "http://127.0.0.1:9000/mcp",
+      "allowed_tools": ["safe_read_only_tool"]
+    }
+  }
+}

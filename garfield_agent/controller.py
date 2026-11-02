@@ -11,6 +11,9 @@ from typing import Any, Callable
 from .runner import PlanRunner, WorkflowLibrary
 from .storage import LocalStore
 from .tools import ToolRegistry
+from .vision import analyze_screen
+from .updates import UpdateManager
+from .model_manager import ModelManager
 
 
 class AgentController:
@@ -28,21 +31,43 @@ class AgentController:
             else Path.home() / ".garfield"
         )
         self.store = LocalStore((data_dir or default_data) / "assistant.sqlite3")
-        self.tools = ToolRegistry(workspace or (Path.home() / "Documents" / "GarfieldWorkspace"), self.store)
+        self.tools = ToolRegistry(workspace or (Path.home() / "Documents" / "GarfieldWorkspace"), self.store, Path(project_dir) / "garfield_mcp_servers.json")
         self.runner = PlanRunner(self.tools, self.store, llm_getter, stop_event)
+        self.updater = UpdateManager(project_dir)
+        self.models = ModelManager()
         self.workflows = WorkflowLibrary(Path(project_dir) / "garfield_workflows.json", self.runner)
 
     def handle(self, command: str) -> str | None:
         text = " ".join(command.strip().split())
         lower = text.lower()
         try:
+            if lower in {"посмотри на экран", "что на экране", "опиши экран"} or lower.startswith("посмотри на экран и "):
+                task = text[len("посмотри на экран и "):] if lower.startswith("посмотри на экран и ") else "Опиши, что видно на экране по-русски."
+                return analyze_screen(task, model=os.getenv("GARFIELD_VISION_MODEL", "llava:7b"))
             if lower.startswith(("агент ", "составь план ")):
                 start = 6 if lower.startswith("агент ") else 13
                 return self.runner.propose(text[start:])
+            if lower in {"исправь план", "предложи исправление", "перепланируй"}:
+                return self.runner.propose_repair()
             if lower in {"подтверди план", "выполни план"}:
                 return self.runner.confirm()
             if lower in {"отмени план", "отмена плана"}:
                 return self.runner.cancel()
+            if lower.startswith("скачай модель "):
+                return self.models.prepare(lower[len("скачай модель "):].strip())
+            if lower == "подтверди загрузку модели":
+                return self.models.confirm()
+            if lower == "отмени загрузку модели":
+                return self.models.cancel()
+            if lower in {"проверь обновления", "проверить обновления", "есть обновление"}:
+                return self.updater.check()
+            if lower in {"подтверди обновление", "установи обновление"}:
+                return self.updater.apply()
+            if lower == "отмени обновление":
+                return self.updater.cancel()
+            if lower == "mcp серверы":
+                servers = self.tools.mcp.servers()
+                return "\n".join(f"{key}: {', '.join(sorted(value['allowed_tools']))}" for key, value in servers.items()) or "MCP-серверы не настроены"
             if lower in {"инструменты агента", "список инструментов агента"}:
                 return "\n".join(f"{x['name']}: {x['description']} [{x['risk']}]" for x in self.tools.catalogue())
             if lower == "сценарии" or lower == "список сценариев":

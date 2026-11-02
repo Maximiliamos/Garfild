@@ -4,6 +4,7 @@ garfield_flagship_config.json
 *.sqlite3
 *.sqlite3-*
 garfield_workflows.json
+garfield_mcp_servers.json
 garfield_session_history.txt
 test_kiro_key.py
 Новый текстовый документ.txt
@@ -14,3 +15,4 @@ venv/
 models/
 voice_samples/
 llm_audit_results.json
+\ndist/\nbuild/\n*.spec\ngarfield_session_history_export.*\n

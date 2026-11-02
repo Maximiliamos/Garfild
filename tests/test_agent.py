@@ -116,6 +116,37 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(len(workflows.due_read_only(datetime(2026, 10, 29, 9, 0))), 0)
         self.assertIn("подтверди план", workflows.preview("hello"))
 
+    def test_failed_plan_rolls_back_new_file_and_can_replan(self):
+        fake = FakeLLM(json.dumps({"steps": [{"tool": "system_status", "args": {}}]}))
+        runner = PlanRunner(self.tools, self.store, lambda: fake)
+        preview = runner.preview("создать и проверить файл", [
+            {"tool": "write_file", "args": {"path": "temporary.txt", "text": "data"}},
+            {"tool": "read_file", "args": {"path": "missing.txt"}},
+        ])
+        self.assertIn("подтверди план", preview)
+        result = runner.confirm()
+        self.assertIn("error:", result)
+        self.assertIn("rollback:", result)
+        self.assertFalse((self.root / "workspace" / "temporary.txt").exists())
+        self.assertIn("подтверди план", runner.propose_repair())
+        self.assertIn("ok:", runner.confirm())
+        self.assertIn("уже использована", runner.propose_repair())
+
+    def test_file_created_event_runs_only_read_only(self):
+        config = {"workflows": [
+            {"id": "filewatch", "name": "Watch", "when_file_created": "incoming.txt",
+             "steps": [{"tool": "system_status", "args": {}}]},
+            {"id": "unsafe", "name": "Unsafe", "when_file_created": "incoming2.txt",
+             "steps": [{"tool": "open_app", "args": {"name": "notepad"}}]},
+        ]}
+        (self.root / "garfield_workflows.json").write_text(json.dumps(config), encoding="utf-8")
+        workflows = WorkflowLibrary(self.root / "garfield_workflows.json", self.runner)
+        self.assertEqual(workflows.due_read_only(), [])
+        (self.root / "workspace" / "incoming.txt").write_text("hi", encoding="utf-8")
+        (self.root / "workspace" / "incoming2.txt").write_text("hi", encoding="utf-8")
+        self.assertEqual(len(workflows.due_read_only()), 1)
+        self.assertEqual(workflows.due_read_only(), [])
+
     def test_commands_recall_and_delete(self):
         controller = AgentController(self.root, lambda: None, threading.Event(), self.root / "db2", self.root / "workspace2")
         reply = controller.handle("запомни купить хлеб")
