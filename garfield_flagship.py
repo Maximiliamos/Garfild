@@ -422,6 +422,7 @@ class FlagshipRuntime:
                 continue
             for job in jobs:
                 success = False
+                detail = ""
                 try:
                     result = []
                     for step in job.steps:
@@ -429,14 +430,18 @@ class FlagshipRuntime:
                             return
                         result.append(self.agent_controller.tools.execute(step["tool"], step["args"]))
                     success = True
+                    detail = "Выполнено шагов: " + str(len(result))
                     self.emit("status", f"Запланированная проверка «{job.label}»: " + " | ".join(result)[:350])
                 except Exception as error:
+                    detail = f"{type(error).__name__}: {error}"[:500]
                     logging.exception("Ошибка сценария %s", job.flow_id)
                     self.emit("status", f"Ошибка сценария «{job.label}»: {error}")
                 finally:
                     if job.run_key:
                         try:
-                            self.agent_controller.store.finish_scheduled_run(job.flow_id, job.run_key, success)
+                            self.agent_controller.store.finish_scheduled_run(
+                                job.flow_id, job.run_key, success, detail
+                            )
                         except Exception:
                             logging.exception("Не удалось записать состояние сценария %s", job.flow_id)
 

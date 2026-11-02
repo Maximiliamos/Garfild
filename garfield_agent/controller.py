@@ -98,6 +98,21 @@ class AgentController:
                 return "\n".join(f"{x['name']}: {x['description']} [{x['risk']}]" for x in self.tools.catalogue())
             if lower == "сценарии" or lower == "список сценариев":
                 return self.workflows.names()
+            if lower in {"журнал заданий", "журнал сценариев", "последние задания"}:
+                rows = self.store.list_scheduled_runs(limit=15)
+                if not rows:
+                    return "Фоновых запусков пока нет."
+                from datetime import datetime
+                return "\n".join(
+                    f"{datetime.fromtimestamp(row['claimed']).strftime('%d.%m %H:%M')} "
+                    f"{row['workflow_id']}: {row['status']} "
+                    f"{row['detail'][:120]}"
+                    for row in rows
+                )
+            if lower.startswith("повтори неудачный сценарий "):
+                return self.workflows.retry_failed_preview(
+                    text[len("повтори неудачный сценарий "):].strip()
+                )
             if lower.startswith("запусти сценарий "):
                 return self.workflows.preview(text[len("запусти сценарий "):].strip())
             if lower.startswith("запомни "):
