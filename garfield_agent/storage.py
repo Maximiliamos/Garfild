@@ -59,6 +59,10 @@ class LocalStore:
             columns = {row[1] for row in db.execute("PRAGMA table_info(scheduled_runs)")}
             if "detail" not in columns:
                 db.execute("ALTER TABLE scheduled_runs ADD COLUMN detail TEXT NOT NULL DEFAULT ''")
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS scheduled_runs_filter_idx "
+                "ON scheduled_runs(status, workflow_id, claimed DESC)"
+            )
         if self.encrypt_at_rest:
             self._migrate_legacy()
 
@@ -213,22 +217,73 @@ class LocalStore:
             if updated.rowcount != 1:
                 raise ValueError("Unknown or already completed scheduled run")
 
-    def list_scheduled_runs(self, limit: int = 50) -> list[dict[str, Any]]:
-        """Return newest scheduled jobs; their text detail is DPAPI protected."""
-        limit = max(1, min(int(limit), 200))
+    @staticmethod
+    def _scheduled_filters(
+        status: str | None, workflow_id: str | None,
+    ) -> tuple[str, list[str]]:
+        if status not in (None, "claimed", "succeeded", "failed"):
+            raise ValueError("Неверный фильтр состояния задания")
+        if workflow_id is not None and (
+            not isinstance(workflow_id, str) or len(workflow_id) > 40
+            or not workflow_id or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789_-"
+                                      for c in workflow_id)
+        ):
+            raise ValueError("Неверный идентификатор сценария")
+        clauses: list[str] = []
+        params: list[str] = []
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        if workflow_id is not None:
+            clauses.append("workflow_id = ?")
+            params.append(workflow_id)
+        return (" WHERE " + " AND ".join(clauses)) if clauses else "", params
+
+    def count_scheduled_runs(
+        self, *, status: str | None = None, workflow_id: str | None = None,
+    ) -> int:
+        where, params = self._scheduled_filters(status, workflow_id)
+        with self._lock, self._connect() as db:
+            row = db.execute(
+                "SELECT COUNT(*) FROM scheduled_runs" + where, params
+            ).fetchone()
+        return int(row[0])
+
+    def list_scheduled_runs(
+        self, limit: int = 50, *, status: str | None = None,
+        workflow_id: str | None = None, offset: int = 0,
+        review_after_sec: int = 1800, now: float | None = None,
+    ) -> list[dict[str, Any]]:
+        """Page through journal entries; never promote an old claim to failure.
+
+        An old claimed record is only flagged as requiring investigation.
+        It may still represent a running task, so automatic retry is unsafe.
+        """
+        limit = int(limit)
+        offset = int(offset)
+        if not 1 <= limit <= 200 or not 0 <= offset <= 100_000:
+            raise ValueError("Неверный размер страницы или смещение")
+        if not 60 <= review_after_sec <= 86_400:
+            raise ValueError("Неверный порог проверки зависших заданий")
+        where, params = self._scheduled_filters(status, workflow_id)
         with self._lock, self._connect() as db:
             rows = db.execute(
                 "SELECT workflow_id, run_key, claimed, status, detail "
-                "FROM scheduled_runs ORDER BY claimed DESC, rowid DESC LIMIT ?",
-                (limit,),
+                "FROM scheduled_runs" + where +
+                " ORDER BY claimed DESC, rowid DESC LIMIT ? OFFSET ?",
+                [*params, limit, offset],
             ).fetchall()
+        current_time = time.time() if now is None else float(now)
         return [
             {
                 "workflow_id": workflow_id, "run_key": run_key,
-                "claimed": float(claimed), "status": status,
+                "claimed": float(claimed), "status": state,
                 "detail": self._unseal(detail),
+                "needs_review": (
+                    state == "claimed" and current_time - float(claimed) >= review_after_sec
+                ),
             }
-            for workflow_id, run_key, claimed, status, detail in rows
+            for workflow_id, run_key, claimed, state, detail in rows
         ]
 
     def latest_scheduled_run(self, workflow_id: str) -> dict[str, Any] | None:
