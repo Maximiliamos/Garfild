@@ -386,7 +386,8 @@ class FlagshipRuntime:
         self.stop_event.set()
         self.listening_enabled = False
         self.tts.stop()
-        self._save_session_history()
+        # No implicit plaintext transcript on shutdown. SQLite persistence is
+        # separately opt-in; plaintext exports require an explicit user action.
 
     def emit(self, kind: str, text: str) -> None:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

@@ -119,6 +119,25 @@ class LocalStore:
         with self._lock, self._connect() as db:
             return db.execute("DELETE FROM notes WHERE id = ?", (int(identifier),)).rowcount > 0
 
+    def _clear_table(self, table: str) -> int:
+        # Internal allowlist; table name cannot be supplied by a user/LLM.
+        if table not in {"notes", "conversations"}:
+            raise ValueError("Invalid local table")
+        with self._lock:
+            with self._connect() as db:
+                deleted = db.execute(f"DELETE FROM {table}").rowcount
+            if deleted:
+                # Rebuild free pages. Backups/OS snapshots are not erased by VACUUM.
+                with self._connect() as db:
+                    db.execute("VACUUM")
+        return int(deleted)
+
+    def clear_saved_history(self) -> int:
+        return self._clear_table("conversations")
+
+    def clear_all_notes(self) -> int:
+        return self._clear_table("notes")
+
     def add_message(self, role: str, text: str) -> None:
         if role not in {"user", "assistant"}:
             raise ValueError("Invalid message role")
